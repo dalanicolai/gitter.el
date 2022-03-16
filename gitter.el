@@ -29,6 +29,7 @@
 
 (require 'json)
 (require 'subr-x)
+(require 'ewoc)
 
 (eval-when-compile (require 'let-alist))
 
@@ -85,6 +86,8 @@ URL `https://developer.gitter.im/docs/streaming-api'.")
 
 (defvar-local gitter--messages nil)
 
+(defvar-local gitter--ewoc nil)
+
 (defvar-local gitter--last-message nil
   "The last message has been inserted.")
 
@@ -95,6 +98,7 @@ URL `https://developer.gitter.im/docs/streaming-api'.")
   "The prompt that you will compose your message after.")
 
 (defvar-local gitter--input-prompt-position 0)
+(defvar-local gitter--process-buffer nil)
 
 (defvar gitter--prompt-function #'gitter--default-prompt
   "function called with message JSON object to return a prompt for chatting logs.")
@@ -220,19 +224,38 @@ message is only included if the complete message is visible."
 (defun gitter--get-message-at-top-start-pos ()
   (car (seq-find (lambda (e) (<= (car e) (window-start))) gitter--message-buffer-positions)))
 
-(defun gitter--insert-messages (messages)
-  (dolist (response messages)
-    (let-alist response
-      (insert (funcall gitter--prompt-function response))
-      (insert
-       (concat (propertize " " 'display `(space . (:width (,(line-pixel-height)))))
-               " "
-               (let ((text .text))
-                 (dolist (fn gitter--markup-text-functions)
-                   (setq text (funcall fn text)))
-                 text))
-       "\n"
-       "\n"))))
+(defun gitter--insert-messages (messages &optional id)
+  (setq gitter--ewoc (ewoc-create (lambda (response)
+                                    (let-alist response
+                                      (if (and gitter--last-message
+                                               (string= .fromUser.username
+                                                        (let-alist gitter--last-message
+                                                          .fromUser.username)))
+                                          ;; Delete one newline
+                                          (delete-char -1)
+                                        (insert (funcall gitter--prompt-function response)))
+                                      (let ((beg (point)))
+                                        (insert
+                                         (concat (propertize " " 'display `(space . (:width (,(line-pixel-height)))))
+                                                 " "
+                                                 (let ((text .text))
+                                                   (dolist (fn gitter--markup-text-functions)
+                                                     (setq text (funcall fn text)))
+                                                   text))
+                                         "\n")
+                                        (fill-region beg (point)))
+                                      (when .threadMessageCount
+                                        (insert (propertize " " 'display `(space . (:width (,(line-pixel-height))))))
+                                        (insert " ")
+                                        (insert-text-button "thread" 'action (lambda (r)
+                                                                               ;; (pop-to-buffer "thread" '(display-buffer-in-direction . ((direction . right))))
+                                                                               (switch-to-buffer-other-window "thread")
+                                                                               (erase-buffer)
+                                                                               (gitter--insert-messages
+                                                                                (gitter--request "GET" (format "/v1/rooms/%s/chatMessages/%s/thread" id .id) '((limit . "100"))))))
+                                        (insert "\n"))))))
+  (dolist (r messages) (ewoc-enter-last gitter--ewoc r))
+  (goto-char (point-max)))
 
 (defun gitter--flag-message-read (room-id unread-items)
   (let ((prev-messages (gitter--request "POST"
@@ -240,65 +263,52 @@ message is only included if the complete message is visible."
                                         nil
                                         `,uritems)))))
 
+(defun gitter--input-window-resize (&optional _ _ _)
+  (fit-window-to-buffer))
+  ;; (window-resize (selected-window) (- (+ 2 (count-lines (point-min) (point-max))) (window-height))))
+
 (defun gitter--open-room (name id)
-  (with-current-buffer (get-buffer-create name)
-    (unless (process-live-p (get-buffer-process (current-buffer)))
-      (gitter-mode)
-      (let ((prev-messages (gitter--request "GET" (format "/v1/rooms/%s/chatMessages" id) '((limit . "100")))))
-        (setq gitter--messages (reverse prev-messages))
-        (dolist (response prev-messages)
-          (let-alist response
-            (push (cons (point) .id) gitter--message-buffer-positions)
-            (insert (funcall gitter--prompt-function response))
-            (insert
-             (concat (propertize " " 'display `(space . (:width (,(line-pixel-height)))))
-                     " "
-                     (let ((text .text))
-                       (dolist (fn gitter--markup-text-functions)
-                         (setq text (funcall fn text)))
-                       text))
-             "\n")
-             (when .threadMessageCount
-               (insert (propertize " " 'display `(space . (:width (,(line-pixel-height))))))
-               (insert " ")
-               (insert-text-button "thread" 'action (lambda (r)
-                                                      ;; (pop-to-buffer "thread" '(display-buffer-in-side-window . ((side . right))))
-                                                      (pop-to-buffer "thread")
-                                                      (erase-buffer)
-                                                      (gitter--insert-messages
-                                                       (gitter--request "GET" (format "/v1/rooms/%s/chatMessages/%s/thread" id .id) '((limit . "100"))))))
-               (insert "\n"))
-             (insert "\n"))))
-      ;; Setup markers
-      (unless gitter--output-marker
-        (setq gitter--output-marker (point-marker))
-        (setq gitter--input-prompt-position (point))
-        (insert gitter--input-prompt)
-        (set-marker-insertion-type gitter--output-marker t)
-        (setq gitter--input-marker (point-max-marker)))
-      (let* ((url (concat gitter--stream-endpoint
-                          (format "/v1/rooms/%s/chatMessages" id)))
-             (headers
-              (list "Accept: application/json"
-                    (format "Authorization: Bearer %s" gitter-token)))
-             (proc
-              ;; NOTE According to (info "(elisp) Asynchronous Processes")
-              ;; we should use a pipe by let-binding `process-connection-type'
-              ;; to nil, however, it doesn't working very well on my system
-              (apply #'start-process
-                     (concat "curl-streaming-process-" name)
-                     (current-buffer)
-                     gitter-curl-program-name
-                     (gitter--curl-args url "GET" headers)))
-             ;; Paser response (json) incrementally
-             ;; Use a scratch buffer to accumulate partial output
-             (parse-buf (generate-new-buffer
-                         (concat " *Gitter search parse for " (buffer-name)))))
-        (process-put proc 'room-id id)
-        (process-put proc 'parse-buf parse-buf)
-        (set-process-filter proc #'gitter--output-filter)))
-    (switch-to-buffer (current-buffer))
-    (recenter -1)))
+  (let ((process-buffer (get-buffer-create name)))
+    (with-current-buffer process-buffer
+      (unless (process-live-p (get-buffer-process (current-buffer)))
+        (auto-fill-mode)
+        (gitter-mode)
+        (let (
+              ;; (fill-column 80)
+              ;; (inhibit-read-only t)
+              (prev-messages (gitter--request "GET" (format "/v1/rooms/%s/chatMessages" id) '((limit . "100")))))
+          (gitter--insert-messages prev-messages id))
+        (let* ((url (concat gitter--stream-endpoint
+                            (format "/v1/rooms/%s/chatMessages" id)))
+               (headers
+                (list "Accept: application/json"
+                      (format "Authorization: Bearer %s" gitter-token)))
+               (proc
+                ;; NOTE According to (info "(elisp) Asynchronous Processes")
+                ;; we should use a pipe by let-binding `process-connection-type'
+                ;; to nil, however, it doesn't working very well on my system
+                (apply #'start-process
+                       (concat "curl-streaming-process-" name)
+                       (current-buffer)
+                       gitter-curl-program-name
+                       (gitter--curl-args url "GET" headers)))
+               ;; Parse response (json) incrementally
+               ;; Use a scratch buffer to accumulate partial output
+               (parse-buf (generate-new-buffer
+                           (concat " *Gitter search parse for " (buffer-name)))))
+          (process-put proc 'room-id id)
+          (process-put proc 'parse-buf parse-buf)
+          (set-process-filter proc #'gitter--output-filter)))
+      (switch-to-buffer (current-buffer))
+      (recenter -1)
+      (pop-to-buffer (get-buffer-create (concat name "-input")) '(display-buffer-below-selected . ((window-height . 2))))
+      (gitter-input-mode)
+      (setq mode-line-format nil)
+      ;; (setq header-line-format (propertize (format "Press %s to send message." (substitute-command-keys "\\[gitter-send-message]")) 'face 'bold))
+      (setq header-line-format (format "Press %s to send message." (substitute-command-keys "\\[gitter-send-message]")))
+      (setq gitter--input-marker (point-max-marker))
+      (setq-local gitter--process-buffer process-buffer)
+      (add-hook 'after-change-functions #'gitter--input-window-resize nil t))))
 
 (defun gitter--output-filter (process output)
   (when gitter--debug
@@ -317,34 +327,26 @@ message is only included if the complete message is visible."
             (progn
               (goto-char (point-min))
               ;; `gitter--read-response' moves point
-              (let* ((response (gitter--read-response)))
-                (let-alist response
-                  (with-current-buffer results-buf
-                    (push response gitter--messages)
-                    (save-excursion
-                      (save-restriction
-                        (goto-char (marker-position gitter--output-marker))
-                        (let ((prev-pos (point)))
-                          (push (cons (point) .id) gitter--message-buffer-positions)
-                          (if (and gitter--last-message
-                                   (string= .fromUser.username
-                                            (let-alist gitter--last-message
-                                              .fromUser.username)))
-                              ;; Delete one newline
-                              (delete-char -1)
-                            (insert (funcall gitter--prompt-function response)))
-                          (insert
-                           (concat (propertize " " 'display `(space . (:width (,(line-pixel-height)))))
-                                   " "
-                                   (let ((text .text))
-                                     (dolist (fn gitter--markup-text-functions)
-                                       (setq text (funcall fn text)))
-                                     text))
-                           "\n"
-                           "\n")
-                          (setq gitter--input-prompt-position (+ gitter--input-prompt-position
-                                                                 (print (- (point) prev-pos)))))
-                        (setq gitter--last-message response))))))
+              (let ((response (gitter--read-response)))
+                (with-current-buffer results-buf
+                  (ewoc-enter-last gitter--ewoc response)
+                ;; (if (and gitter--last-message
+                ;;          (string= .fromUser.username
+                ;;                   (let-alist gitter--last-message
+                ;;                     .fromUser.username)))
+                ;;     ;; Delete one newline
+                ;;     (delete-char -1)
+                ;;   (insert (funcall gitter--prompt-function response)))
+                ;; (insert
+                ;;  (concat (propertize " " 'display `(space . (:width (,(line-pixel-height)))))
+                ;;          " "
+                ;;          (let ((text .text))
+                ;;            (dolist (fn gitter--markup-text-functions)
+                ;;              (setq text (funcall fn text)))
+                ;;            text))
+                ;;  "\n"
+                ;;  "\n")
+                  (setq gitter--last-message response)))
               (delete-region (point-min) (point)))
           (error
            ;; FIXME
@@ -362,21 +364,23 @@ message is only included if the complete message is visible."
                                                gitter--known-users))
       (push .fromUser gitter--known-users)
       (unless (member .fromUser.username (directory-files gitter--avatar-dir))
-        (when .fromUser.avatarUrlSmall
-          (url-copy-file .fromUser.avatarUrlSmall
-                         (concat gitter--avatar-dir .fromUser.username)))))
-    (concat
-     (if .fromUser.avatarUrlSmall
-         (propertize " " 'display (create-image (concat gitter--avatar-dir .fromUser.username)
-                                                nil
-                                                nil
-                                                :height (line-pixel-height)
-                                                :ascent 100))
-       (concat (propertize " " 'display `(space . (:width (,(line-pixel-height))))) " "))
-     " " (propertize .fromUser.displayName 'face 'bold)
-     " @" (propertize .fromUser.username)
-     " " (propertize .sent 'face 'shadow)
-            "\n")))
+        (url-copy-file (or .fromUser.avatarUrlSmall
+                           (let* ((splitname (split-string .fromUser.displayName))
+                                  (url-name (mapconcat #'identity splitname "+")))
+                             (concat "https://ui-avatars.com/api/?name=%s" url-name)))
+                         (concat gitter--avatar-dir .fromUser.username))))
+    (let* ((text (format "%s @%s %s".fromUser.displayName .fromUser.username .sent))
+           (whitespace (make-string (- 80 (length text)) (string-to-char " "))))
+      (concat
+       (propertize " " 'display (create-image (concat gitter--avatar-dir .fromUser.username)
+                                              nil
+                                              nil
+                                              :height (line-pixel-height)
+                                              :ascent 100))
+       " "
+       (propertize (concat text whitespace)
+                   'face '(bold highlight))
+       "\n"))))
 
 ;; The result produced by `markdown-mode' was not satisfying
 ;;
@@ -440,7 +444,7 @@ For reference, see URL
 
 
 ;; FIXME Maybe it is better to use a major mode
-(define-derived-mode gitter-mode fundamental-mode "Gitter"
+(define-derived-mode gitter-mode special-mode "Gitter"
   "Minor mode which is enabled automatically in Gitter buffers.
 With a prefix argument ARG, enable the mode if ARG is positive,
 and disable it otherwise.  If called from Lisp, enable the mode
@@ -453,9 +457,42 @@ chaotic), that's not my intention but I don't want to bother with
 learning how to make commandsnon-interactive."
   :group 'gitter)
 
-(define-key gitter-mode-map "\C-c\C-c" #'gitter-send-message)
+(evil-define-key 'motion gitter-mode-map
+  "j" #'gitter-goto-next-message
+  "k" #'gitter-goto-prev-message)
+
+(define-derived-mode gitter-input-mode fundamental-mode nil
+  "Minor mode which is enabled automatically in Gitter buffers.
+With a prefix argument ARG, enable the mode if ARG is positive,
+and disable it otherwise.  If called from Lisp, enable the mode
+if ARG is omitted or nil.
+
+Ustually you don't need to call it interactively, it is
+interactive because of the cost of using `define-minor-mode'.
+Sorry to make your M-x more chaotic (yes, I think M-x is already
+chaotic), that's not my intention but I don't want to bother with
+learning how to make commandsnon-interactive."
+  :group 'gitter)
+
+(define-key gitter-input-mode-map "\C-c\C-c" #'gitter-send-message)
 
 ;;; Commands
+
+(evil-define-motion gitter-goto-next-message (count)
+  :type block
+  (ewoc-goto-next gitter--ewoc (or count 1)))
+
+(evil-define-motion gitter-goto-prev-message (count)
+  :type block
+  (ewoc-goto-prev gitter--ewoc (or count 1)))
+
+;; (defun gitter-goto-next-message ()
+;;   (interactive)
+;;   (ewoc-goto-next gitter--ewoc 1))
+
+;; (defun gitter-goto-prev-message ()
+;;   (interactive)
+;;   (ewoc-goto-prev gitter--ewoc 1))
 
 ;;;###autoload
 (defun gitter ()
@@ -501,7 +538,7 @@ machine gitter.im password here-is-your-token"))))
 (defun gitter-send-message ()
   "Send message in the current Gitter buffer."
   (interactive)
-  (let ((proc (get-buffer-process (current-buffer))))
+  (let ((proc (get-buffer-process gitter--process-buffer)))
     (when (and proc (process-live-p proc))
       (let* ((id (process-get proc 'room-id))
              (resource (format "/v1/rooms/%s/chatMessages" id))
@@ -514,7 +551,8 @@ machine gitter.im password here-is-your-token"))))
           (gitter--request "POST" resource
                            nil `((text . ,msg)))
           (delete-region (marker-position gitter--input-marker)
-                         (point-max)))))))
+                         (point-max))
+          (setq header-line-format nil))))))
 
 (provide 'gitter)
 ;;; gitter.el ends here

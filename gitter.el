@@ -195,7 +195,8 @@ PARAMS is an alist."
     rooms))
 
 (defun gitter--room-id ()
-  (alist-get 'id (seq-find (lambda (r) (alist-get (buffer-name) r) nil nil #'string=)
+  (alist-get 'id (seq-find (lambda (r)
+                             (string= (alist-get 'name r) (buffer-name)))
                            gitter--user-rooms)))
 
 (defun gitter--search ()
@@ -204,22 +205,70 @@ PARAMS is an alist."
                                         '((limit . "500") (q . "dalanicolai")))))
     (completing-read "Select message" (mapcar (lambda (m) (alist-get 'text m)) (print prev-messages)))))
 
+(defun gitter--last-non-whitespace ()
+  (save-excursion
+    (goto-char (point-max))
+    (search-backward-regexp "[^[:blank:]]")))
+
+(defun gitter--ewoc-message-id (node)
+  (alist-get 'id (ewoc-data node)))
+
+(defun gitter--ewoc-collect (ewoc predicate &rest args)
+  "Like `ewoc-collect' but passes the node itself to the predicate."
+  (ewoc--set-buffer-bind-dll-let* ewoc
+      ((header (ewoc--header ewoc))
+       (node (ewoc--node-nth dll -2))
+       result)
+    (while (not (eq node header))
+      (if (apply predicate node args)
+	        (push node result))
+      (setq node (ewoc--node-prev dll node)))
+    result))
+
 (defun gitter--currently-displayed-messages ()
-  "Return list of currently displayed messages.
-The list is returned as an alist consisting of
-elements (message-start-pos . message-id). The first message is
-included even if (its header) is not fully visible. The last
-message is only included if the complete message is visible."
-  (let ((last-message-idx 0)
-        (message-positions gitter--message-buffer-positions))
-    (while (<= (window-end) (caar message-positions))
-      (setq last-message-idx (1+ last-message-idx))
-      (setq message-positions (cdr message-positions)))
-    (let ((first-message-idx last-message-idx))
-      (while (< (window-start) (caar message-positions))
-        (setq first-message-idx (1+ first-message-idx))
-        (setq message-positions (cdr message-positions)))
-      (seq-subseq gitter--message-buffer-positions last-message-idx first-message-idx))))
+  ;; We first collect all nodes with point between window, and reverse it
+  (let* ((displayed-nodes (reverse
+                              (gitter--ewoc-collect gitter--ewoc
+                                                    (lambda (r)
+                                                      (< (window-start) (ewoc-location r) (window-end))))))
+         ;; Subsequently we check if the last node is fully displayed otherwise we
+         ;; do not include it (in the returned list)
+
+         ;; If `displayed-nodes' nodes includes the last node must use a
+         ;; different way to check if it fully displayed
+         (last (car displayed-nodes))
+         (next (ewoc-next gitter--ewoc last)))
+    (mapcar (lambda (n)
+              (alist-get 'id (ewoc--node-data n)))
+            (if next
+                (if (= (ewoc-location next) (window-end))
+                    displayed-nodes
+                  (cdr displayed-nodes))
+              (if (> (window-end) (gitter--last-non-whitespace))
+                  displayed-nodes
+                (cdr displayed-nodes))))))
+
+;; (defun gitter--currently-displayed-messages ()
+;;   (let* ((first (ewoc-locate gitter--ewoc (window-start)))
+;;          (first-full (if (print (= (window-start) (ewoc-location first)))
+;;                          first
+;;                        (ewoc-next gitter--ewoc first)))
+;;          (last (ewoc-locate gitter--ewoc (window-end)))
+;;          (last-full (if-let (l (ewoc-next gitter--ewoc last))
+;;                         (if (= (window-end) (ewoc-location l))
+;;                             last
+;;                           (ewoc-prev gitter--ewoc last))
+;;                       (if (> (window-end) (gitter--last-non-whitespace))
+;;                           last
+;;                         (ewoc-prev gitter--ewoc last))))
+;;          messages)
+;;     (push (gitter--ewoc-message-id first-full) messages)
+;;     (let ((next-node (ewoc-next gitter--ewoc first-full)))
+;;       (while (not (eq next-node last-full))
+;;         (push (gitter--ewoc-message-id next-node) messages)
+;;         (setq next-node (ewoc-next gitter--ewoc next-node)))
+;;       (push (gitter--ewoc-message-id last-full) messages))
+;;     messages))
 
 (defun gitter--get-message-at-top-start-pos ()
   (car (seq-find (lambda (e) (<= (car e) (window-start))) gitter--message-buffer-positions)))
@@ -257,11 +306,12 @@ message is only included if the complete message is visible."
   (dolist (r messages) (ewoc-enter-last gitter--ewoc r))
   (goto-char (point-max)))
 
-(defun gitter--flag-message-read (room-id unread-items)
-  (let ((prev-messages (gitter--request "POST"
-                                        (format "/v1/user/%s/rooms/%s/unreadItems" gitter--user-id room-id)
-                                        nil
-                                        `,uritems)))))
+(defun gitter--flag-message-read (room-id unread-items &optional get)
+  (apply #'gitter--request (if get "GET" "POST")
+         (format "/v1/user/%s/rooms/%s/unreadItems" gitter--user-id room-id)
+         (unless get
+           (list nil
+                 (list (cons 'chat unread-items))))))
 
 (defun gitter--input-window-resize (&optional _ _ _)
   (fit-window-to-buffer))

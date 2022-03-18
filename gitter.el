@@ -23,6 +23,13 @@
 
 ;;; Commentary:
 
+;; fix 'mark as read' functionality
+
+;; TODO make-buttons (including actions) of avatar and message header
+
+;; TODO make-buttons (including actions) of unread and mentions
+;; indicators (on input-buffer header line)
+
 ;; See https://github.com/xuchunyang/gitter.el
 
 ;;; Code:

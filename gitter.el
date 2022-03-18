@@ -303,7 +303,7 @@ PARAMS is an alist."
                                       (when .threadMessageCount
                                         (insert (propertize " " 'display `(space . (:width (,(line-pixel-height))))))
                                         (insert " ")
-                                        (insert-text-button "thread" 'action (lambda (r)
+                                        (insert-text-button "replies" 'action (lambda (r)
                                                                                ;; (pop-to-buffer "thread" '(display-buffer-in-direction . ((direction . right))))
                                                                                (switch-to-buffer-other-window "thread")
                                                                                (erase-buffer)

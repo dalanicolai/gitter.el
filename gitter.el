@@ -324,12 +324,22 @@ PARAMS is an alist."
   (fit-window-to-buffer))
   ;; (window-resize (selected-window) (- (+ 2 (count-lines (point-min) (point-max))) (window-height))))
 
-(defun gitter--open-room (name id)
-  (let ((process-buffer (get-buffer-create name)))
+(defun gitter--open-room (room-data)
+  (let* ((name (alist-get 'name room-data))
+         (id (alist-get 'id room-data))
+         (process-buffer (get-buffer-create name))
+         (input-buffer (concat name "-input")))
     (with-current-buffer process-buffer
       (unless (process-live-p (get-buffer-process (current-buffer)))
         (auto-fill-mode)
         (gitter-mode)
+        (setq cursor-type nil)
+        (setq gitter--process-buffer process-buffer)
+        (setq gitter--input-buffer input-buffer)
+
+        ;; (add-hook 'window-configuration-change-hook #'gitter--display-input-buffer nil t)
+        ;; (add-hook 'kill-buffer-hook #'gitter--kill-input-buffer nil t)
+        ;; (setq buffer-quit-function #'gitter--bury)
         (let (
               ;; (fill-column 80)
               ;; (inhibit-read-only t)
@@ -356,16 +366,49 @@ PARAMS is an alist."
           (process-put proc 'room-id id)
           (process-put proc 'parse-buf parse-buf)
           (set-process-filter proc #'gitter--output-filter)))
+
+        ;; (with-current-buffer (get-buffer-create input-buffer)
+        ;;   (gitter-input-mode)
+        ;;   (setq-local gitter--process-buffer process-buffer)
+        ;;   (setq buffer-quit-function #'gitter--bury)
+        ;;   (setq mode-line-format nil)
+        ;;   (setq header-line-format (propertize (format "Press %s to send
+        ;;   message." (substitute-command-keys "\\[gitter-send-message]")) 'face
+        ;;   'bold))
+        ;;   (setq header-line-format (format "Input. Press %s to send message."
+        ;;                                    (substitute-command-keys "\\[gitter-send-message]")))
+        ;;   (setq gitter--input-marker (point-max-marker))
+        ;;   (add-hook 'after-change-functions #'gitter--input-window-resize nil t)))
+
       (switch-to-buffer (current-buffer))
-      (recenter -1)
-      (pop-to-buffer (get-buffer-create (concat name "-input")) '(display-buffer-below-selected . ((window-height . 2))))
+      ;; (setq mode-line-format nil)
+      (recenter -1))))
+        ;;   (pop-to-buffer gitter--input-buffer
+        ;;                  '(display-buffer-below-selected . ((dedicated . t)))))
+        ;; ;; (setq header-line-format "Input:\t\t\tthreads")
+        ;; (fit-window-to-buffer)))
+
+(defun gitter-input ()
+  (interactive)
+  (let ((process-buffer gitter--process-buffer))
+    (with-current-buffer (get-buffer-create gitter--input-buffer)
       (gitter-input-mode)
-      (setq mode-line-format nil)
-      ;; (setq header-line-format (propertize (format "Press %s to send message." (substitute-command-keys "\\[gitter-send-message]")) 'face 'bold))
-      (setq header-line-format (format "Press %s to send message." (substitute-command-keys "\\[gitter-send-message]")))
-      (setq gitter--input-marker (point-max-marker))
       (setq-local gitter--process-buffer process-buffer)
-      (add-hook 'after-change-functions #'gitter--input-window-resize nil t))))
+      ;; (setq buffer-quit-function #'gitter--bury)
+      (setq mode-line-format nil)
+      ;; (setq header-line-format (propertize (format "Press %s to send
+      ;;       message." (substitute-command-keys "\\[gitter-send-message]")) 'face
+      ;;       'bold))
+      ;; (setq header-line-format (format "Input. Press %s to send message."
+      ;;                                  (substitute-command-keys "\\[gitter-send-message]")))
+      (setq gitter--input-marker (point-max-marker))
+      (add-hook 'after-change-functions #'gitter--input-window-resize nil t))
+    (pop-to-buffer gitter--input-buffer
+                   '(display-buffer-below-selected . ((dedicated . t))))
+    (fit-window-to-buffer)))
+
+(when (featurep 'evil)
+  (add-to-list 'evil-insert-state-modes 'gitter-input-mode))
 
 (defun gitter--output-filter (process output)
   (when gitter--debug
@@ -514,11 +557,16 @@ chaotic), that's not my intention but I don't want to bother with
 learning how to make commandsnon-interactive."
   :group 'gitter)
 
+
+(evil-define-key 'normal gitter-mode-map
+  "i" #'gitter-input)
+
 (evil-define-key 'motion gitter-mode-map
   "j" #'gitter-goto-next-message
-  "k" #'gitter-goto-prev-message)
+  "k" #'gitter-goto-prev-message
+  (kbd "<tab>") #'gitter-switch-buffer)
 
-(define-derived-mode gitter-input-mode fundamental-mode nil
+(define-derived-mode gitter-input-mode fundamental-mode "Gitter input"
   "Minor mode which is enabled automatically in Gitter buffers.
 With a prefix argument ARG, enable the mode if ARG is positive,
 and disable it otherwise.  If called from Lisp, enable the mode
@@ -531,17 +579,15 @@ chaotic), that's not my intention but I don't want to bother with
 learning how to make commandsnon-interactive."
   :group 'gitter)
 
-(define-key gitter-input-mode-map "\C-c\C-c" #'gitter-send-message)
+(define-key gitter-input-mode-map
+            "\C-c\C-c" #'gitter-send-message)
+
+(evil-define-key 'normal gitter-input-mode-map
+  "C-j"   #'gitter-goto-next-message
+  "C-k"   #'gitter-goto-prev-message
+  (kbd "<tab>") #'gitter-switch-buffer)
 
 ;;; Commands
-
-(evil-define-motion gitter-goto-next-message (count)
-  :type block
-  (ewoc-goto-next gitter--ewoc (or count 1)))
-
-(evil-define-motion gitter-goto-prev-message (count)
-  :type block
-  (ewoc-goto-prev gitter--ewoc (or count 1)))
 
 ;; (defun gitter-goto-next-message ()
 ;;   (interactive)
@@ -550,6 +596,23 @@ learning how to make commandsnon-interactive."
 ;; (defun gitter-goto-prev-message ()
 ;;   (interactive)
 ;;   (ewoc-goto-prev gitter--ewoc 1))
+
+(evil-define-motion gitter-goto-next-message (count)
+  :type block
+  (with-selected-window (get-buffer-window gitter--process-buffer)
+    (ewoc-goto-next gitter--ewoc (or count 1))))
+
+(evil-define-motion gitter-goto-prev-message (count)
+  :type block
+  (with-selected-window (get-buffer-window gitter--process-buffer)
+    (ewoc-goto-prev gitter--ewoc (or count 1))))
+
+(defun gitter-switch-buffer ()
+  (interactive)
+  (pop-to-buffer
+   (if (get-buffer-process (current-buffer))
+       gitter--input-buffer
+     gitter--process-buffer)))
 
 ;;;###autoload
 (defun gitter ()
@@ -568,13 +631,12 @@ machine gitter.im password here-is-your-token"))))
   (setq gitter--user-rooms (gitter--request "GET" "/v1/rooms"))
   ;; FIXME Assuming room name is unique because of `completing-read'
   (let* ((rooms (mapcar (lambda (alist)
-                          (let-alist alist
-                            (cons .name .id)))
+                          (alist-get 'name alist))
                         gitter--user-rooms))
          (completion-extra-properties '(:annotation-function
-                                        (lambda (c)
+                                        (lambda (name)
                                           (let* ((room (seq-find (lambda (r)
-                                                                   (rassoc c r))
+                                                                   (rassoc name r))
                                                                  gitter--user-rooms))
                                                  (unread   (alist-get 'unreadItems room))
                                                  (mentions (alist-get 'mentions room)))
@@ -587,10 +649,12 @@ machine gitter.im password here-is-your-token"))))
                                                        (format " mentions %s" mentions)
                                                        'face 'warning)))))))
          (name (completing-read "Open room: " rooms nil t))
-         (id (cdr (assoc name rooms))))
+         (room-data (seq-find (lambda (r)
+                                (rassoc name r))
+                              gitter--user-rooms)))
     (unless (file-directory-p gitter--avatar-dir)
       (make-directory gitter--avatar-dir))
-    (gitter--open-room name id)))
+    (gitter--open-room room-data)))
 
 (defun gitter-send-message ()
   "Send message in the current Gitter buffer."
@@ -607,9 +671,10 @@ machine gitter.im password here-is-your-token"))))
             (error "Can't send empty message")
           (gitter--request "POST" resource
                            nil `((text . ,msg)))
-          (delete-region (marker-position gitter--input-marker)
-                         (point-max))
-          (setq header-line-format nil))))))
+          (kill-buffer))))))
+
+          ;; (delete-region (marker-position gitter--input-marker)
+          ;;                (point-max)))))))
 
 (provide 'gitter)
 ;;; gitter.el ends here

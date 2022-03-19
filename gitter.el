@@ -39,6 +39,7 @@
 (require 'ewoc)
 
 (eval-when-compile (require 'let-alist))
+(eval-when-compile (require 'evil nil t))
 
 
 ;;; Customization
@@ -557,14 +558,11 @@ chaotic), that's not my intention but I don't want to bother with
 learning how to make commandsnon-interactive."
   :group 'gitter)
 
-
-(evil-define-key 'normal gitter-mode-map
-  "i" #'gitter-input)
-
-(evil-define-key 'motion gitter-mode-map
-  "j" #'gitter-goto-next-message
-  "k" #'gitter-goto-prev-message
-  (kbd "<tab>") #'gitter-switch-buffer)
+;; (evil-define-key 'normal gitter-mode-map
+;;   "i" #'gitter-input
+;;   "C-j" #'gitter-goto-next-message
+;;   "C-k" #'gitter-goto-prev-message
+;;   (kbd "<tab>") #'gitter-switch-buffer)
 
 (define-derived-mode gitter-input-mode fundamental-mode "Gitter input"
   "Minor mode which is enabled automatically in Gitter buffers.
@@ -582,10 +580,10 @@ learning how to make commandsnon-interactive."
 (define-key gitter-input-mode-map
             "\C-c\C-c" #'gitter-send-message)
 
-(evil-define-key 'normal gitter-input-mode-map
-  "C-j"   #'gitter-goto-next-message
-  "C-k"   #'gitter-goto-prev-message
-  (kbd "<tab>") #'gitter-switch-buffer)
+;; (evil-define-key 'normal gitter-input-mode-map
+;;   "C-j"   #'gitter-goto-next-message
+;;   "C-k"   #'gitter-goto-prev-message
+;;   (kbd "<tab>") #'gitter-switch-buffer)
 
 ;;; Commands
 
@@ -597,15 +595,16 @@ learning how to make commandsnon-interactive."
 ;;   (interactive)
 ;;   (ewoc-goto-prev gitter--ewoc 1))
 
-(evil-define-motion gitter-goto-next-message (count)
-  :type block
-  (with-selected-window (get-buffer-window gitter--process-buffer)
-    (ewoc-goto-next gitter--ewoc (or count 1))))
+(when (featurep 'evil)
+  (evil-define-motion gitter-goto-next-message (count)
+    :type block
+    (with-selected-window (get-buffer-window gitter--process-buffer)
+      (ewoc-goto-next gitter--ewoc (or count 1))))
 
-(evil-define-motion gitter-goto-prev-message (count)
-  :type block
-  (with-selected-window (get-buffer-window gitter--process-buffer)
-    (ewoc-goto-prev gitter--ewoc (or count 1))))
+  (evil-define-motion gitter-goto-prev-message (count)
+    :type block
+    (with-selected-window (get-buffer-window gitter--process-buffer)
+      (ewoc-goto-prev gitter--ewoc (or count 1)))))
 
 (defun gitter-switch-buffer ()
   (interactive)

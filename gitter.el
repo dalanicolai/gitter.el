@@ -23,7 +23,11 @@
 
 ;;; Commentary:
 
-;; fix 'mark as read' functionality
+;; TODO fix flag unread in thread buffer
+
+;; TODO fix jump to unread when message in thread
+
+;; TODO fix flag mentions
 
 ;; TODO make-buttons (including actions) of avatar and message header
 
@@ -99,14 +103,12 @@ URL `https://developer.gitter.im/docs/streaming-api'.")
 (defvar-local gitter--last-message nil
   "The last message has been inserted.")
 
-(defvar gitter--input-prompt
-  (concat (propertize "──────────[ Compose after this line.  Send C-c C-c"
-                      'face 'font-lock-comment-face)
-          "\n")
-  "The prompt that you will compose your message after.")
-
-(defvar-local gitter--input-prompt-position 0)
+(defvar-local gitter--room-data nil)
+(defvar-local gitter--room-name nil)
+(defvar-local gitter--room-id nil)
+(defvar-local gitter--unread-items nil)
 (defvar-local gitter--process-buffer nil)
+(defvar-local gitter--input-buffer nil)
 
 (defvar gitter--prompt-function #'gitter--default-prompt
   "function called with message JSON object to return a prompt for chatting logs.")
@@ -121,8 +123,8 @@ URL `https://developer.gitter.im/docs/streaming-api'.")
 (defvar gitter--avatar-dir (file-name-as-directory
                             (concat (temporary-file-directory) "gitter")))
 
-(defvar-local gitter--message-buffer-positions nil)
-(defvar-local gitter--message-at-top-start-pos 0)
+(defvar-local gitter--window-start 0)
+(defvar-local gitter--timer nil)
 
 (defvar gitter--markup-text-functions '(string-trim
                                         gitter--markup-fenced-code)
@@ -211,7 +213,7 @@ PARAMS is an alist."
   (let ((prev-messages (gitter--request "GET"
                                         (format "/v1/rooms/%s/chatMessages" (gitter--room-id))
                                         '((limit . "500") (q . "dalanicolai")))))
-    (completing-read "Select message" (mapcar (lambda (m) (alist-get 'text m)) (print prev-messages)))))
+    (completing-read "Select message" (mapcar (lambda (m) (alist-get 'text m)) prev-messages))))
 
 (defun gitter--last-non-whitespace ()
   (save-excursion
@@ -233,14 +235,26 @@ PARAMS is an alist."
       (setq node (ewoc--node-prev dll node)))
     result))
 
+(defun gitter--ewoc-find (ewoc predicate &rest args)
+  (ewoc--set-buffer-bind-dll-let* ewoc
+                                  ((header (ewoc--header ewoc))
+                                   (node (ewoc--node-nth dll -2))
+                                   result)
+                                  (while (not (eq node header))
+                                    (if (apply predicate (ewoc--node-data node) args)
+	                                      (push node result))
+                                    (setq node (ewoc--node-prev dll node)))
+                                  result))
+
 (defun gitter--currently-displayed-messages ()
   ;; We first collect all nodes with point between window, and reverse it
   (let* ((displayed-nodes (reverse
                               (gitter--ewoc-collect gitter--ewoc
                                                     (lambda (r)
                                                       (< (window-start) (ewoc-location r) (window-end))))))
-         ;; Subsequently we check if the last node is fully displayed otherwise we
-         ;; do not include it (in the returned list)
+         ;; Subsequently we check if the last node (car of displayed-nodes) is
+         ;; fully displayed otherwise we do not include it (in the returned
+         ;; list)
 
          ;; If `displayed-nodes' nodes includes the last node must use a
          ;; different way to check if it fully displayed
@@ -278,52 +292,187 @@ PARAMS is an alist."
 ;;       (push (gitter--ewoc-message-id last-full) messages))
 ;;     messages))
 
-(defun gitter--get-message-at-top-start-pos ()
-  (car (seq-find (lambda (e) (<= (car e) (window-start))) gitter--message-buffer-positions)))
+(defun gitter--ewoc-pp-message (response)
+  (let-alist response
+             (if (and gitter--last-message
+                      (string= .fromUser.username
+                               (let-alist gitter--last-message
+                                 .fromUser.username)))
+                 ;; Delete one newline
+                 (delete-char -1)
+               (insert (funcall gitter--prompt-function response)))
+             (let ((beg (point)))
+               (insert
+                (concat (apply #'propertize
+                               " "
+                               (append (list 'display `(space . (:width (,(line-pixel-height)))))
+                                       (when .unread (list 'face
+                                                           (cons 'background-color (if .mentions
+                                                                                       "orange3"
+                                                                                     "green3"))))))
+                        " "
+                        (let ((text .text))
+                          (dolist (fn gitter--markup-text-functions)
+                            (setq text (funcall fn text)))
+                          text))
+                "\n")
+               (fill-region beg (point)))
+             (when .threadMessageCount
+               (insert (propertize " " 'display `(space . (:width (,(line-pixel-height))))))
+               (insert " ")
+               (insert-text-button "replies"
+                                   'action (lambda (_)
+                                             ;; (pop-to-buffer "thread" '(display-buffer-in-direction . ((direction . right))))
+                                             (let ((id gitter--room-id))
+                                               (switch-to-buffer-other-window "thread")
+                                               (erase-buffer)
+                                               (gitter-mode)
+                                               (setq gitter--room-id id)
+                                               (gitter--insert-messages
+                                                (gitter--request "GET"
+                                                                       (format "/v1/rooms/%s/chatMessages/%s/thread" id .id)
+                                                                       '((limit . "100")))))))
+               (insert "\n"))))
 
 (defun gitter--insert-messages (messages &optional id)
-  (setq gitter--ewoc (ewoc-create (lambda (response)
-                                    (let-alist response
-                                      (if (and gitter--last-message
-                                               (string= .fromUser.username
-                                                        (let-alist gitter--last-message
-                                                          .fromUser.username)))
-                                          ;; Delete one newline
-                                          (delete-char -1)
-                                        (insert (funcall gitter--prompt-function response)))
-                                      (let ((beg (point)))
-                                        (insert
-                                         (concat (propertize " " 'display `(space . (:width (,(line-pixel-height)))))
-                                                 " "
-                                                 (let ((text .text))
-                                                   (dolist (fn gitter--markup-text-functions)
-                                                     (setq text (funcall fn text)))
-                                                   text))
-                                         "\n")
-                                        (fill-region beg (point)))
-                                      (when .threadMessageCount
-                                        (insert (propertize " " 'display `(space . (:width (,(line-pixel-height))))))
-                                        (insert " ")
-                                        (insert-text-button "replies" 'action (lambda (r)
-                                                                               ;; (pop-to-buffer "thread" '(display-buffer-in-direction . ((direction . right))))
-                                                                               (switch-to-buffer-other-window "thread")
-                                                                               (erase-buffer)
-                                                                               (gitter--insert-messages
-                                                                                (gitter--request "GET" (format "/v1/rooms/%s/chatMessages/%s/thread" id .id) '((limit . "100"))))))
-                                        (insert "\n"))))))
+  (setq gitter--ewoc
+        (ewoc-create #'gitter--ewoc-pp-message))
   (dolist (r messages) (ewoc-enter-last gitter--ewoc r))
   (goto-char (point-max)))
 
-(defun gitter--flag-message-read (room-id unread-items &optional get)
+(defun gitter--flag-messages-read (room-id unread-items &optional get)
   (apply #'gitter--request (if get "GET" "POST")
          (format "/v1/user/%s/rooms/%s/unreadItems" gitter--user-id room-id)
          (unless get
            (list nil
                  (list (cons 'chat unread-items))))))
 
+(defun gitter--unread-and-mentions ()
+  (gitter--request "GET"
+                         (format "/v1/user/%s/rooms/%s/unreadItems" gitter--user-id gitter--room-id)))
+
+(defun gitter-flag-displayed-read (room-id)
+  (interactive)
+  (when (and gitter--room-id
+             (string= gitter--room-id room-id))
+    (let ((messages (gitter--currently-displayed-messages)))
+      (gitter--flag-messages-read gitter--room-id messages)
+      (setq gitter--room-data (gitter--request "GET" (format "/v1/rooms/%s" room-id)))
+      ;; (setq gitter--messages (print (gitter--request "GET"
+      ;;                                                (print (format "/v1/rooms/%s/chatMessages"
+      ;;                                                               room-id
+      ;;                                                               ))
+      ;;                                                (print (list (cons 'limit "2") ;(number-to-string (print (length messages))))
+      ;;                                                             (cons 'beforeId (car messages)))))))
+      ;; (let ((inhibit-read-only t))
+      ;;   ;; (point (point)))
+      ;;   (erase-buffer)
+      ;;   (gitter--insert-messages gitter--messages)
+      ;;   ;; (goto-char point)
+      (ewoc-map (lambda (data)
+                  (when (and (alist-get 'unread data)
+                             (member (alist-get 'id data)
+                                     (gitter--currently-displayed-messages)))
+                    (setf (alist-get 'unread data) nil) t))
+                  gitter--ewoc))
+    (setq-local global-mode-string (gitter--mode-line-buttons (alist-get 'unreadItems gitter--room-data)
+                                                              (alist-get 'mentions gitter--room-data)))
+    (force-mode-line-update)))
+
+(defun gitter-flag-all-read ()
+  (interactive)
+  (gitter--flag-messages-read gitter--room-id (alist-get 'chat (gitter--unread-and-mentions))))
+
+(defun gitter--update-timer ()
+  (unless (= gitter--window-start (window-start)) 
+    (when (timerp gitter--timer)
+          (cancel-timer gitter--timer))
+    (setq gitter--timer (run-at-time "1 sec" nil #'gitter-flag-displayed-read gitter--room-id)))
+  (setq gitter--window-start (window-start)))
+
 (defun gitter--input-window-resize (&optional _ _ _)
   (fit-window-to-buffer))
   ;; (window-resize (selected-window) (- (+ 2 (count-lines (point-min) (point-max))) (window-height))))
+
+(defun gitter--unread-button-action ()
+  (interactive)
+  (gitter--goto-unread-item 'chat))
+
+(defun gitter--mentions-button-action ()
+  (interactive)
+  (gitter--goto-unread-item 'mention))
+
+(defconst gitter-unread-button-map (let ((map (make-sparse-keymap)))
+                                     (define-key map [mode-line down-mouse-1] #'gitter--unread-button-action)
+                                     map))
+
+(defconst gitter-mentions-button-map (let ((map (make-sparse-keymap)))
+                                      (define-key map [mode-line down-mouse-1] #'gitter--mentions-button-action)
+                                      map))
+
+(defun gitter--goto-unread-item (type)
+  (let* ((id (car (alist-get type gitter--unread-items)))
+         (node (car (gitter--ewoc-find gitter--ewoc
+                                      (lambda (m)
+                                        (string= (alist-get 'id m)
+                                                 id))))))
+    (if node
+        (ewoc-goto-node gitter--ewoc node)
+      ;; if `id' is not found in the ewoc then it is probably a reply (in a
+      ;; thread)
+      (let* ((room-id gitter--room-id)
+             (data (gitter--request "GET" (format "/v1/rooms/%s/chatMessages/%s" room-id id)))
+             (parent-id (alist-get 'parentId data)))
+        (switch-to-buffer-other-window "thread")
+        (erase-buffer)
+        (gitter-mode)
+        (setq gitter--room-id room-id)
+        (gitter--insert-messages
+         (gitter--request "GET" (format "/v1/rooms/%s/chatMessages/%s/thread" room-id parent-id) '((limit . "100"))))
+        (add-hook 'post-command-hook #'gitter--update-timer nil t)))))
+
+(defun gitter--mode-line-buttons (&optional unread mentions)
+  (let* ((unread-items (when (or (not unread) (or (/= unread 0) (/= mentions 0)))
+                        (gitter--unread-and-mentions)))
+         (unread (length (alist-get 'chat unread-items)))
+         (mentions (length (alist-get 'mention unread-items))))
+    (when unread-items
+      (setq gitter--unread-items unread-items))
+    (concat (unless (= unread 0)
+              (propertize (format "unread: %s" unread)
+                          'face 'success
+                          'mouse-face 'mode-line-highlight
+                          'keymap gitter-unread-button-map))
+            " "
+            (unless (= mentions 0)
+              (propertize (format "mentions: %s" mentions)
+                          'face 'warning
+                          'mouse-face 'mode-line-highlight
+                          'keymap gitter-mentions-button-map)))))
+
+;; TODO See if this function can replace part of `gitter--open-room'
+;; (defun gitter--create-message-buffer (buffer-data messages)
+;;   (let* ((name (alist-get 'name data))
+;;          (id (alist-get 'id data))
+;;          (process-buffer (get-buffer-create name))
+;;          (input-buffer (concat name "-input")))
+;;     (auto-fill-mode)
+;;     (gitter-mode)
+;;     (setq cursor-type nil)
+;;     (setq gitter--room-data data)
+;;     (setq gitter--room-id id)
+;;     (setq gitter--room-name name)
+;;     (setq gitter--process-buffer process-buffer)
+;;     (setq gitter--input-buffer input-buffer)
+
+;;     ;; (setq-local global-mode-string (gitter--mode-line-buttons (alist-get 'unreadItems data)
+;;     ;;                                                           (alist-get 'mentions data)))
+
+;;     (add-hook 'post-command-hook #'gitter--update-timer nil t)
+;;     ;; (add-hook 'window-configuration-change-hook #'gitter--display-input-buffer nil t)
+;;     ;; (add-hook 'kill-buffer-hook #'gitter--kill-input-buffer nil t)
+;;     ;; (setq buffer-quit-function #'gitter--bury)
+;;     (gitter--insert-messages messages id)))
 
 (defun gitter--open-room (room-data)
   (let* ((name (alist-get 'name room-data))
@@ -335,9 +484,16 @@ PARAMS is an alist."
         (auto-fill-mode)
         (gitter-mode)
         (setq cursor-type nil)
+        (setq gitter--room-data room-data)
+        (setq gitter--room-id id)
+        (setq gitter--room-name name)
         (setq gitter--process-buffer process-buffer)
         (setq gitter--input-buffer input-buffer)
 
+        (setq-local global-mode-string (gitter--mode-line-buttons (alist-get 'unreadItems room-data)
+                                                                        (alist-get 'mentions room-data)))
+
+        (add-hook 'post-command-hook #'gitter--update-timer nil t)
         ;; (add-hook 'window-configuration-change-hook #'gitter--display-input-buffer nil t)
         ;; (add-hook 'kill-buffer-hook #'gitter--kill-input-buffer nil t)
         ;; (setq buffer-quit-function #'gitter--bury)
@@ -410,6 +566,26 @@ PARAMS is an alist."
 
 (when (featurep 'evil)
   (add-to-list 'evil-insert-state-modes 'gitter-input-mode))
+
+;; (defun gitter--header-line ()
+;;   (let* ((text (format "Input. Press %s to send message."
+;;                        (substitute-command-keys "\\[gitter-send-message]")))
+;; 	 (room-data (gitter--request "GET" (format "/v1/rooms/%s" (gitter--room-id))))
+;; 	 (unread (alist-get 'unreadItems room-data))
+;; 	 (mentions (alist-get 'mentions room-data))
+;; 	 (buttons-text (concat
+;; 			(unless (= unread 0) (format "unread: %s" unread))
+;; 			"   "
+;; 			(unless (= mentions 0) (format "mentions: %s" mentions))))
+;; 	 (spaces (make-string (- 80 (length (concat "Input:" buttons-text))) (string-to-char " "))))
+;;     (print (concat "Input:" spaces buttons-text))))
+
+;; (defun gitter--display-input-buffer ()
+;;   (when (buffer-live-p gitter--process-buffer)
+;;     (pop-to-buffer gitter--input-buffer
+;;                    '(display-buffer-below-selected . ((dedicated . t)))))
+;;   (setq header-line-format "Input:\t\t\tthreads")
+;;   (fit-window-to-buffer))
 
 (defun gitter--output-filter (process output)
   (when gitter--debug

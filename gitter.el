@@ -789,6 +789,12 @@ learning how to make commandsnon-interactive."
        gitter--input-buffer
      gitter--process-buffer)))
 
+(defun gitter-print-ewoc ()
+  (interactive)
+  (if gitter--ewoc
+      (ewoc-map (lambda (x) (pp x) (princ "\n")) gitter--ewoc)
+    (user-error "Buffer does not contain a gitter-ewoc")))
+
 ;;;###autoload
 (defun gitter ()
   "Open a room.

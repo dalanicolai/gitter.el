@@ -41,6 +41,7 @@
 (require 'json)
 (require 'subr-x)
 (require 'ewoc)
+(require 'shr)
 
 (eval-when-compile (require 'let-alist))
 (eval-when-compile (require 'evil nil t))
@@ -135,7 +136,22 @@ The functions are called in the Gitter buffer, you can examine some buffer
 local variables etc easily, but you should not modify the buffer or change the
 current buffer.")
 
+(defvar gitter--formatting-library 'shr)
 
+(defun shr-tag-code (dom)
+  (let ((lang (alist-get 'class (cadr dom))))
+    (insert (concat "\n\n" (propertize (concat "#+BEGIN_SRC " lang) 'face 'highlight) "\n"))
+    (if lang
+        (insert (gitter--fontify-code (with-temp-buffer
+                                        (shr-generic dom)
+                                        (buffer-string))
+                                      (pcase lang
+                                        ("lisp" 'emacs-lisp-mode)
+                                        ("python" 'python-mode))))
+      (shr-generic dom)))
+  (insert (concat "\n" (propertize "#+END_SRC" 'face 'highlight) "\n\n")))
+
+
 ;;; Utility
 
 (defmacro gitter--debug (format-string &rest args)
@@ -292,6 +308,14 @@ PARAMS is an alist."
 ;;       (push (gitter--ewoc-message-id last-full) messages))
 ;;     messages))
 
+(defun gitter-cycle-formatting-library ()
+  (interactive)
+  (let ((options '(shr markdown-mode original)))
+    (print (setq gitter--formatting-library
+                 (if-let (x(cdr (member gitter--formatting-library options)))
+                     (car x)
+                   'shr)))))
+
 (defun gitter--ewoc-pp-message (response)
   (let-alist response
              (if (and gitter--last-message
@@ -302,21 +326,32 @@ PARAMS is an alist."
                  (delete-char -1)
                (insert (funcall gitter--prompt-function response)))
              (let ((beg (point)))
-               (insert
-                (concat (apply #'propertize
-                               " "
-                               (append (list 'display `(space . (:width (,(line-pixel-height)))))
-                                       (when .unread (list 'face
-                                                           (cons 'background-color (if .mentions
-                                                                                       "orange3"
-                                                                                     "green3"))))))
-                        " "
-                        (let ((text .text))
-                          (dolist (fn gitter--markup-text-functions)
-                            (setq text (funcall fn text)))
-                          text))
-                "\n")
-               (fill-region beg (point)))
+               ;; (insert (concat (apply #'propertize
+               ;;                        " "
+               ;;                        (append (list 'display `(space . (:width (,(line-pixel-height)))))
+                               ;;                (when .unread (list 'face
+                               ;;                                    (cons 'background-color (if .mentions
+                               ;;                                                                "orange3"
+                               ;;                                                              "green3"))))))
+                               ;; " "))
+               (pcase gitter--formatting-library
+                 ('shr (let* ((shr-max-width 80)
+                              (html .html)
+                              (formatted-text
+                               (with-temp-buffer (insert html)
+                                                 (libxml-parse-html-region (point-min) (point-max)))))
+                         (shr-insert-document formatted-text)))
+                 ('markdown-mode (insert (with-temp-buffer
+                                           (insert .text)
+                                           ;; (markdown-mode)
+                                           (gitter--fontify-code (buffer-string) 'markdown-mode))))
+                 ('original (insert (let ((text .text))
+                                      (dolist (fn gitter--markup-text-functions)
+                                        (setq text (funcall fn text)))
+                                      text))))
+                (insert "\n")
+               ;; (fill-region beg (point))
+                )
              (when .threadMessageCount
                (insert (propertize " " 'display `(space . (:width (,(line-pixel-height))))))
                (insert " ")
@@ -440,13 +475,13 @@ PARAMS is an alist."
       (setq gitter--unread-items unread-items))
     (concat (unless (= unread 0)
               (propertize (format "unread: %s" unread)
-                          'face 'success
+                          'face '(:foreground "seagreen")
                           'mouse-face 'mode-line-highlight
                           'keymap gitter-unread-button-map))
             " "
             (unless (= mentions 0)
               (propertize (format "mentions: %s" mentions)
-                          'face 'warning
+                          'face '(:foreground "orange4")
                           'mouse-face 'mode-line-highlight
                           'keymap gitter-mentions-button-map)))))
 
@@ -647,7 +682,7 @@ PARAMS is an alist."
                              (concat "https://ui-avatars.com/api/?name=%s" url-name)))
                          (concat gitter--avatar-dir .fromUser.username))))
     (let* ((text (format "%s @%s %s".fromUser.displayName .fromUser.username .sent))
-           (whitespace (make-string (- 80 (length text)) (string-to-char " "))))
+           (whitespace (make-string (- 78 (length text)) (string-to-char " "))))
       (concat
        (propertize " " 'display (create-image (concat gitter--avatar-dir .fromUser.username)
                                               nil
@@ -656,7 +691,9 @@ PARAMS is an alist."
                                               :ascent 100))
        " "
        (propertize (concat text whitespace)
-                   'face '(bold highlight))
+                   'face (list 'bold :background (if .unread
+                                                     (if .mentions "orange4" "seagreen")
+                                                   "dimgrey")))
        "\n"))))
 
 ;; The result produced by `markdown-mode' was not satisfying
@@ -824,11 +861,11 @@ machine gitter.im password here-is-your-token"))))
                                             (concat (when (/= unread 0)
                                                       (propertize
                                                        (format " unread: %s" unread)
-                                                       'face 'success))
+                                                       'face '(:foreground "seagreen")))
                                                      (when (/= mentions 0)
                                                        (propertize
                                                        (format " mentions %s" mentions)
-                                                       'face 'warning)))))))
+                                                       'face '(:foreground "orange4"))))))))
          (name (completing-read "Open room: " rooms nil t))
          (room-data (seq-find (lambda (r)
                                 (rassoc name r))

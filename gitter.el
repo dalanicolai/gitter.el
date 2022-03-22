@@ -42,6 +42,7 @@
 (require 'subr-x)
 (require 'ewoc)
 (require 'shr)
+(require 'shr-tag-pre-highlight)
 
 (eval-when-compile (require 'let-alist))
 (eval-when-compile (require 'evil nil t))
@@ -138,19 +139,32 @@ current buffer.")
 
 (defvar gitter--formatting-library 'shr)
 
-(defun shr-tag-code (dom)
-  (let ((lang (alist-get 'class (cadr dom))))
-    (insert (concat "\n\n" (propertize (concat "#+BEGIN_SRC " lang) 'face 'highlight) "\n"))
-    (if lang
-        (insert (gitter--fontify-code (with-temp-buffer
-                                        (shr-generic dom)
-                                        (buffer-string))
-                                      (pcase lang
-                                        ("lisp" 'emacs-lisp-mode)
-                                        ("python" 'python-mode))))
-      (shr-generic dom)))
-  (insert (concat "\n" (propertize "#+END_SRC" 'face 'highlight) "\n\n")))
+(add-to-list 'shr-external-rendering-functions
+             '(pre . shr-tag-pre-highlight))
 
+;; (defun shr-tag-code (dom)
+;;   (let ((lang (alist-get 'class (cadr dom))))
+;;     (insert (concat "\n\n" (propertize (concat "#+BEGIN_SRC " lang) 'face 'highlight) "\n"))
+;;     (if lang
+;;         (insert (gitter--fontify-code (with-temp-buffer
+;;                                         (shr-generic dom)
+;;                                         (buffer-string))
+;;                                       (pcase lang
+;;                                         ("lisp" 'emacs-lisp-mode)
+;;                                         ("python" 'python-mode))))
+;;       (shr-generic dom)))
+;;   (insert (concat "\n" (propertize "#+END_SRC" 'face 'highlight) "\n\n")))
+
+(defun shr-tag-p (dom)
+  (shr-generic dom)
+  (shr-ensure-paragraph))
+
+(defun shr-tag-code (dom)
+  (let* ((shr-current-font 'fixed-pitch)
+         (text (with-temp-buffer
+                 (shr-generic dom)
+                 (buffer-string))))
+    (insert (propertize text 'face 'org-code))))
 
 ;;; Utility
 
@@ -693,7 +707,7 @@ PARAMS is an alist."
        (propertize (concat text whitespace)
                    'face (list 'bold :background (if .unread
                                                      (if .mentions "orange4" "seagreen")
-                                                   "dimgrey")))
+                                                   "#545558")))
        "\n"))))
 
 ;; The result produced by `markdown-mode' was not satisfying

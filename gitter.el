@@ -338,7 +338,7 @@ PARAMS is an alist."
                                  .fromUser.username)))
                  ;; Delete one newline
                  (delete-char -1)
-               (insert (funcall gitter--prompt-function response)))
+               (funcall gitter--prompt-function response))
              (let ((beg (point)))
                ;; (insert (concat (apply #'propertize
                ;;                        " "
@@ -385,7 +385,7 @@ PARAMS is an alist."
 
 (defun gitter--insert-messages (messages &optional id)
   (setq gitter--ewoc
-        (ewoc-create #'gitter--ewoc-pp-message))
+        (ewoc-create #'gitter--ewoc-pp-message nil nil t))
   (dolist (r messages) (ewoc-enter-last gitter--ewoc r))
   (goto-char (point-max)))
 
@@ -697,19 +697,23 @@ PARAMS is an alist."
                          (concat gitter--avatar-dir .fromUser.username))))
     (let* ((text (format "%s @%s %s".fromUser.displayName .fromUser.username .sent))
            (whitespace (make-string (- 80 (length text)) (string-to-char " "))))
-      (concat
-       (when window-system
-         (concat (propertize " " 'display (create-image (concat gitter--avatar-dir .fromUser.username)
-                                                        nil
-                                                        nil
-                                                        :height (line-pixel-height)
-                                                        :ascent 100))
-                 "\n"))
-       (propertize (concat text whitespace)
-                   'face (list 'bold :background (if .unread
-                                                     (if .mentions "orange4" "seagreen")
-                                                   "#545558")))
-       "\n"))))
+      (when window-system
+        (insert (concat (propertize " " 'display (create-image (concat gitter--avatar-dir .fromUser.username)
+                                                               nil
+                                                               nil
+                                                               :height (line-pixel-height)
+                                                               :ascent 100))
+                        "\n")))
+      (insert-text-button (concat text whitespace)
+                          'face (list 'bold :background (if .unread
+                                                            (if .mentions "orange4" "seagreen")
+                                                          "#545558"))
+                          'action (lambda (b) (print (ewoc-data (ewoc-locate gitter--ewoc b)))))
+      ;; (propertize (concat text whitespace)
+      ;;             'face (list 'bold :background (if .unread
+      ;;                                               (if .mentions "orange4" "seagreen")
+      ;;                                             "#545558")))
+      (insert "\n"))))
 
 ;; The result produced by `markdown-mode' was not satisfying
 ;;

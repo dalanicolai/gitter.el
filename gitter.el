@@ -696,14 +696,15 @@ PARAMS is an alist."
                              (concat "https://ui-avatars.com/api/?name=%s" url-name)))
                          (concat gitter--avatar-dir .fromUser.username))))
     (let* ((text (format "%s @%s %s".fromUser.displayName .fromUser.username .sent))
-           (whitespace (make-string (- 78 (length text)) (string-to-char " "))))
+           (whitespace (make-string (- 80 (length text)) (string-to-char " "))))
       (concat
-       (propertize " " 'display (create-image (concat gitter--avatar-dir .fromUser.username)
-                                              nil
-                                              nil
-                                              :height (line-pixel-height)
-                                              :ascent 100))
-       " "
+       (when window-system
+         (concat (propertize " " 'display (create-image (concat gitter--avatar-dir .fromUser.username)
+                                                        nil
+                                                        nil
+                                                        :height (line-pixel-height)
+                                                        :ascent 100))
+                 "\n"))
        (propertize (concat text whitespace)
                    'face (list 'bold :background (if .unread
                                                      (if .mentions "orange4" "seagreen")

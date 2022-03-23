@@ -305,7 +305,8 @@ PARAMS is an alist."
   (let* ((displayed-nodes (reverse
                               (gitter--ewoc-collect gitter--ewoc
                                                     (lambda (r)
-                                                      (< (window-start) (ewoc-location r) (window-end))))))
+                                                      (or (<= (window-start) (ewoc-location r))
+                                                          (< (ewoc-location r) (window-end)))))))
          ;; Subsequently we check if the last node (car of displayed-nodes) is
          ;; fully displayed otherwise we do not include it (in the returned
          ;; list)

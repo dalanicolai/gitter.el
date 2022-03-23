@@ -43,6 +43,7 @@
 (require 'ewoc)
 (require 'shr)
 (require 'shr-tag-pre-highlight)
+(require 'avy)
 
 (eval-when-compile (require 'let-alist))
 (eval-when-compile (require 'evil nil t))
@@ -722,6 +723,30 @@ PARAMS is an alist."
                      "\n"
                      output))))))))
 
+(defun gitter--collect-buttons (type)
+  "Return a list of widget-button positions."
+  (let (button-positions)
+    (save-excursion
+      (goto-char (window-start))
+      (while (< (point) (window-end))
+        (when (eq (get-text-property (point) 'type)
+                  type)
+          (push (point) button-positions))
+        (goto-char (next-property-change (point) nil (window-end)))))
+    (nreverse button-positions)))
+
+(defun gitter--ace-buttons (type)
+  "Ace jump to links in `spacemacs' buffer."
+  (interactive)
+  (require 'avy)
+  (let ((res (avy-with gitter--ace-buttons
+               (avy--process
+                (gitter--collect-buttons type)
+                #'avy--overlay-pre))))
+    (when (numberp res)
+      (goto-char (1+ res))
+      (push-button (point)))))
+
 ;;; Prompt
 (define-button-type 'gitter-avatar)
 (define-button-type 'gitter-display-name)
@@ -964,6 +989,18 @@ learning how to make commandsnon-interactive."
   (if gitter--ewoc
       (ewoc-map (lambda (x) (pp x) (princ "\n")) gitter--ewoc)
     (user-error "Buffer does not contain a gitter-ewoc")))
+
+(defun gitter-ace-mention ()
+  (interactive)
+  (gitter--ace-buttons 'gitter-username))
+
+(defun gitter-ace-edit ()
+  (interactive)
+  (gitter--ace-buttons 'gitter-edit))
+
+(defun gitter-ace-data ()
+  (interactive)
+  (gitter--ace-buttons 'gitter-data))
 
 ;;;###autoload
 (defun gitter ()

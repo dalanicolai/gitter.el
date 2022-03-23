@@ -789,7 +789,11 @@ buttons located within the ewoc."
                           'type 'gitter-username
                           'face (list (gitter--prompt-face response) 'bold)
                           'action (lambda (b)
-                                    (button-get b 'face)))
+                                    (let ((label (button-label b)))
+                                      (if-let (buf (get-buffer gitter--input-buffer))
+                                          (switch-to-buffer buf)
+                                        (gitter-input))
+                                      (insert label))))
       (insert (propertize " " 'face (gitter--prompt-face response)))
       (insert-text-button .sent 
                           'type 'gitter-data

@@ -111,6 +111,7 @@ URL `https://developer.gitter.im/docs/streaming-api'.")
 (defvar-local gitter--unread-items nil)
 (defvar-local gitter--process-buffer nil)
 (defvar-local gitter--input-buffer nil)
+(defvar-local gitter--node nil)
 
 (defvar gitter--prompt-function #'gitter--default-prompt
   "function called with message JSON object to return a prompt for chatting logs.")
@@ -138,6 +139,29 @@ local variables etc easily, but you should not modify the buffer or change the
 current buffer.")
 
 (defvar gitter--formatting-library 'shr)
+
+;; To distinguish different buttons (by char-property), we define separate
+;; face(s)(-names)
+(defface gitter-prompt
+  '((((background light))
+     :background "LightSalmon")
+    (((background dark))
+     :background "#212225")
+    (t :inverse-video t))
+  "Basic face for highlighting."
+  :group 'gitter-faces)
+
+(defface gitter-prompt-unread
+  '((((background dark)) :background "darkolivegreen")
+    (t :inverse-video t))
+  "Basic face for highlighting."
+  :group 'gitter-faces)
+
+(defface gitter-prompt-mention
+  '((((background dark)) :background "orange4")
+    (t :inverse-video t))
+  "Basic face for highlighting."
+  :group 'gitter-faces)
 
 (add-to-list 'shr-external-rendering-functions
              '(pre . shr-tag-pre-highlight))
@@ -337,7 +361,16 @@ PARAMS is an alist."
                                (let-alist gitter--last-message
                                  .fromUser.username)))
                  ;; Delete one newline
-                 (delete-char -1)
+                 (progn (unless .editedAt (delete-char -1))
+                        (insert-text-button (make-string 78 (string-to-char " "))
+                                            'face (list (gitter--prompt-face response))
+                                            'action (lambda (b) (pp (gitter--button-get-data b))))
+                        (insert-text-button "···"
+                                            'face (list (gitter--prompt-face response))
+                                            'type 'gitter-edit
+                                            'action (lambda (b)
+                                                      (gitter-edit (ewoc-locate gitter--ewoc b))))
+                        (insert "\n"))
                (funcall gitter--prompt-function response))
              (let ((beg (point)))
                ;; (insert (concat (apply #'propertize
@@ -489,7 +522,7 @@ PARAMS is an alist."
       (setq gitter--unread-items unread-items))
     (concat (unless (= unread 0)
               (propertize (format "unread: %s" unread)
-                          'face '(:foreground "seagreen")
+                          'face '(:foreground "darkolivegreen")
                           'mouse-face 'mode-line-highlight
                           'keymap gitter-unread-button-map))
             " "
@@ -594,11 +627,13 @@ PARAMS is an alist."
         ;; ;; (setq header-line-format "Input:\t\t\tthreads")
         ;; (fit-window-to-buffer)))
 
-(defun gitter-input ()
+(defun gitter-input (&optional node)
   (interactive)
   (let ((process-buffer gitter--process-buffer))
     (with-current-buffer (get-buffer-create gitter--input-buffer)
-      (gitter-input-mode)
+      (cond (node (gitter-edit-mode)
+                  (setq gitter--node node))
+            (t (gitter-input-mode)))
       (setq-local gitter--process-buffer process-buffer)
       ;; (setq buffer-quit-function #'gitter--bury)
       (setq mode-line-format nil)
@@ -608,10 +643,14 @@ PARAMS is an alist."
       ;; (setq header-line-format (format "Input. Press %s to send message."
       ;;                                  (substitute-command-keys "\\[gitter-send-message]")))
       (setq gitter--input-marker (point-max-marker))
+      (when node (insert (alist-get 'text (ewoc-data node))))
       (add-hook 'after-change-functions #'gitter--input-window-resize nil t))
     (pop-to-buffer gitter--input-buffer
                    '(display-buffer-below-selected . ((dedicated . t))))
     (fit-window-to-buffer)))
+
+(defun gitter-edit (node)
+  (gitter-input node))
 
 (when (featurep 'evil)
   (add-to-list 'evil-insert-state-modes 'gitter-input-mode))
@@ -682,6 +721,31 @@ PARAMS is an alist."
                      "\n"
                      output))))))))
 
+;;; Prompt
+(define-button-type 'gitter-avatar)
+(define-button-type 'gitter-display-name)
+(define-button-type 'gitter-username)
+(define-button-type 'gitter-data)
+(define-button-type 'gitter-edit)
+
+(defun gitter--button-get-data (button)
+  "Get message data from ewoc.
+This function should only be used within the action property of
+buttons located within the ewoc."
+  (ewoc-data (ewoc-locate gitter--ewoc button)))
+
+(defvar gitter-avatar-map
+  (print (let ((map (make-sparse-keymap "Select option: ")))
+           (define-key map "a" '("THIS" . test))
+           (define-key map "b" '("THAT" . test))
+     map)))
+
+(defun gitter--prompt-face (response)
+  (let-alist response
+          (if .unread
+              (if .mentions 'gitter-prompt-mention 'gitter-prompt-unread)
+            'gitter-prompt)))
+
 (defun gitter--default-prompt (response)
   "Default function to make prompt by using the JSON object MESSAGE."
   (let-alist response
@@ -696,23 +760,52 @@ PARAMS is an alist."
                              (concat "https://ui-avatars.com/api/?name=%s" url-name)))
                          (concat gitter--avatar-dir .fromUser.username))))
     (let* ((text (format "%s @%s %s".fromUser.displayName .fromUser.username .sent))
-           (whitespace (make-string (- 80 (length text)) (string-to-char " "))))
+           (whitespace (make-string (- 76 (length text)) (string-to-char " "))))
       (when window-system
-        (insert (concat (propertize " " 'display (create-image (concat gitter--avatar-dir .fromUser.username)
-                                                               nil
-                                                               nil
-                                                               :height (line-pixel-height)
-                                                               :ascent 100))
-                        "\n")))
-      (insert-text-button (concat text whitespace)
-                          'face (list 'bold :background (if .unread
-                                                            (if .mentions "orange4" "seagreen")
-                                                          "#545558"))
-                          'action (lambda (b) (print (ewoc-data (ewoc-locate gitter--ewoc b)))))
-      ;; (propertize (concat text whitespace)
-      ;;             'face (list 'bold :background (if .unread
-      ;;                                               (if .mentions "orange4" "seagreen")
-      ;;                                             "#545558")))
+        (insert-text-button " "
+                            'type 'gitter-avatar
+                            'display (create-image (concat gitter--avatar-dir .fromUser.username)
+                                                   nil
+                                                   nil
+                                                   :height (line-pixel-height)
+                                                   :ascent 100)
+                            'action (lambda (b)
+                                      (let-alist (ewoc-data (ewoc-locate gitter--ewoc b))
+                                        (pp .fromUser.id))))
+        ;; (pcase-let ((`(,x . ,y) (window-absolute-pixel-position b)))
+        ;;   (x-popup-menu (list (list x y) (selected-window))
+        ;;                       (list gitter-avatar-map)))))
+
+        ;; '("user" ("choice" ("line" . 3) ("circ" . 4))))))))
+        (insert "\n"))
+      (insert-text-button .fromUser.displayName
+                          'type 'gitter-display-name
+                          'face (list (gitter--prompt-face response) 'bold)
+                          'action (lambda (b)
+                                    (let-alist (gitter--button-get-data b)
+                                      (pp .fromUser.id))))
+      (insert (propertize " " 'face (gitter--prompt-face response)))
+      (insert-text-button (concat "@" .fromUser.username)
+                          'type 'gitter-username
+                          'face (list (gitter--prompt-face response) 'bold)
+                          'action (lambda (b)
+                                    (button-get b 'face)))
+      (insert (propertize " " 'face (gitter--prompt-face response)))
+      (insert-text-button .sent 
+                          'type 'gitter-data
+                          'face (list (gitter--prompt-face response)))
+      ;; (insert (propertize (concat text whitespace)
+      ;;                     'face (test response)))
+      (insert (propertize " " 'face (gitter--prompt-face response)))
+      (insert-text-button whitespace
+                          'face (list (gitter--prompt-face response))
+                          'action (lambda (b) (pp (gitter--button-get-data b))))
+      (insert (propertize " " 'face (gitter--prompt-face response)))
+      (insert-text-button "···"
+                          'type 'gitter-edit
+                          'face (gitter--prompt-face response)
+                          'action (lambda (b)
+                                    (gitter-edit (ewoc-locate gitter--ewoc b))))
       (insert "\n"))))
 
 ;; The result produced by `markdown-mode' was not satisfying
@@ -812,6 +905,22 @@ learning how to make commandsnon-interactive."
 (define-key gitter-input-mode-map
             "\C-c\C-c" #'gitter-send-message)
 
+(define-derived-mode gitter-edit-mode fundamental-mode "Gitter edit"
+  "Minor mode which is enabled automatically in Gitter buffers.
+With a prefix argument ARG, enable the mode if ARG is positive,
+and disable it otherwise.  If called from Lisp, enable the mode
+if ARG is omitted or nil.
+
+Ustually you don't need to call it interactively, it is
+interactive because of the cost of using `define-minor-mode'.
+Sorry to make your M-x more chaotic (yes, I think M-x is already
+chaotic), that's not my intention but I don't want to bother with
+learning how to make commandsnon-interactive."
+  :group 'gitter)
+
+(define-key gitter-edit-mode-map
+            "\C-c\C-c" #'gitter-update-message)
+
 ;; (evil-define-key 'normal gitter-input-mode-map
 ;;   "C-j"   #'gitter-goto-next-message
 ;;   "C-k"   #'gitter-goto-prev-message
@@ -880,7 +989,7 @@ machine gitter.im password here-is-your-token"))))
                                             (concat (when (/= unread 0)
                                                       (propertize
                                                        (format " unread: %s" unread)
-                                                       'face '(:foreground "seagreen")))
+                                                       'face '(:foreground "darkolivegreen")))
                                                      (when (/= mentions 0)
                                                        (propertize
                                                        (format " mentions %s" mentions)
@@ -893,7 +1002,7 @@ machine gitter.im password here-is-your-token"))))
       (make-directory gitter--avatar-dir))
     (gitter--open-room room-data)))
 
-(defun gitter-send-message ()
+(defun gitter-send-message (&optional node)
   "Send message in the current Gitter buffer."
   (interactive)
   (let ((proc (get-buffer-process gitter--process-buffer)))
@@ -906,12 +1015,24 @@ machine gitter.im password here-is-your-token"))))
                     (point-max)))))
         (if (string-empty-p msg)
             (error "Can't send empty message")
-          (gitter--request "POST" resource
+          (gitter--request (if node "PUT" "POST")
+                           (if node
+                                     (concat resource "/" (alist-get 'id (ewoc-data node)))
+                                   resource)
                            nil `((text . ,msg)))
-          (kill-buffer))))))
+          (kill-buffer))
+        (when node
+          (ewoc-set-data node
+                         (gitter--request "GET"
+                                                (concat resource "/" (alist-get 'id (ewoc-data node)))
+                                                nil `((text . ,msg))))
+          (ewoc-invalidate gitter--ewoc node))))))
+      ;; (delete-region (marker-position gitter--input-marker)
+      ;;                (point-max)))))))
 
-          ;; (delete-region (marker-position gitter--input-marker)
-          ;;                (point-max)))))))
+(defun gitter-update-message ()
+  (interactive)
+  (gitter-send-message gitter--node))
 
 (provide 'gitter)
 ;;; gitter.el ends here

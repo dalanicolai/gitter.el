@@ -364,7 +364,7 @@ PARAMS is an alist."
                                  .fromUser.username)))
                  ;; Delete one newline
                  (progn (unless .editedAt (delete-char -1))
-                        (insert-text-button (make-string 78 (string-to-char " "))
+                        (insert-text-button (make-string 118 (string-to-char " "))
                                             'face (list (gitter--prompt-face response))
                                             'action (lambda (b) (pp (gitter--button-get-data b))))
                         (insert-text-button "···"
@@ -384,7 +384,8 @@ PARAMS is an alist."
                                ;;                                                              "green3"))))))
                                ;; " "))
                (pcase gitter--formatting-library
-                 ('shr (let* ((shr-max-width 80)
+                 ('shr (let* (
+                              ;; (shr-max-width 120)
                               (html .html)
                               (formatted-text
                                (with-temp-buffer (insert html)
@@ -564,54 +565,79 @@ PARAMS is an alist."
 ;;     (gitter--insert-messages messages id)))
 
 (defun gitter--open-room (room-data)
-  (let* ((name (alist-get 'name room-data))
-         (id (alist-get 'id room-data))
-         (process-buffer (get-buffer-create name))
-         (input-buffer (concat name "-input")))
-    (with-current-buffer process-buffer
-      (unless (process-live-p (get-buffer-process (current-buffer)))
-        (auto-fill-mode)
-        (gitter-mode)
-        (setq cursor-type nil)
-        (setq gitter--room-data room-data)
-        (setq gitter--room-id id)
-        (setq gitter--room-name name)
-        (setq gitter--process-buffer process-buffer)
-        (setq gitter--input-buffer input-buffer)
+  (let-alist room-data
+    (let* (
+           ;; (name (alist-get 'name room-data))
+           ;; (id (alist-get 'id room-data))
+           (avatar-name (car (last (split-string .name "/"))))
+           (avatar-path (print (concat gitter--avatar-dir avatar-name)))
+           (room-avatar (unless (file-exists-p avatar-path)
+                          (url-copy-file .avatarUrl avatar-path)))
+           (process-buffer (get-buffer-create .name))
+           (input-buffer (concat .name "-input")))
+      (with-current-buffer process-buffer
+        (unless (process-live-p (get-buffer-process (current-buffer)))
+          (auto-fill-mode)
+          (gitter-mode)
+          (setq cursor-type nil)
+          (setq gitter--room-data room-data)
+          (setq gitter--room-id .id)
+          (setq gitter--room-name .name)
+          (setq gitter--process-buffer process-buffer)
+          (setq gitter--input-buffer input-buffer)
 
-        (setq-local global-mode-string (gitter--mode-line-buttons (alist-get 'unreadItems room-data)
-                                                                        (alist-get 'mentions room-data)))
+          (setq-local global-mode-string (gitter--mode-line-buttons (alist-get 'unreadItems room-data)
+                                                                    (alist-get 'mentions room-data)))
+          (setq-local header-line-format
+                      (concat
+                       (propertize
+                        (concat (make-text-button " " nil
+                                                  'display (create-image (if (string= .id "543c742ddb8155e6700cb292")
+                                                                             (concat user-emacs-directory
+                                                                                     "core/banners/img/spacemacs.png")
+                                                                           avatar-path)
+                                                                         nil
+                                                                         nil
+                                                                         :height (round (* 1.4 (line-pixel-height)))
+                                                                         :ascent 70))
+                                " "
+                                (make-text-button .name nil))
+                        'face 'bold)
+                       ;; (propertize " " 'face (list :background "maroon4"))
+                       " "
+                       (propertize .topic
+                                   'face (list 'bold :height 80))))
 
-        (add-hook 'post-command-hook #'gitter--update-timer nil t)
-        ;; (add-hook 'window-configuration-change-hook #'gitter--display-input-buffer nil t)
-        ;; (add-hook 'kill-buffer-hook #'gitter--kill-input-buffer nil t)
-        ;; (setq buffer-quit-function #'gitter--bury)
-        (let (
-              ;; (fill-column 80)
-              ;; (inhibit-read-only t)
-              (prev-messages (gitter--request "GET" (format "/v1/rooms/%s/chatMessages" id) '((limit . "100")))))
-          (gitter--insert-messages prev-messages id))
-        (let* ((url (concat gitter--stream-endpoint
-                            (format "/v1/rooms/%s/chatMessages" id)))
-               (headers
-                (list "Accept: application/json"
-                      (format "Authorization: Bearer %s" gitter-token)))
-               (proc
-                ;; NOTE According to (info "(elisp) Asynchronous Processes")
-                ;; we should use a pipe by let-binding `process-connection-type'
-                ;; to nil, however, it doesn't working very well on my system
-                (apply #'start-process
-                       (concat "curl-streaming-process-" name)
-                       (current-buffer)
-                       gitter-curl-program-name
-                       (gitter--curl-args url "GET" headers)))
-               ;; Parse response (json) incrementally
-               ;; Use a scratch buffer to accumulate partial output
-               (parse-buf (generate-new-buffer
-                           (concat " *Gitter search parse for " (buffer-name)))))
-          (process-put proc 'room-id id)
-          (process-put proc 'parse-buf parse-buf)
-          (set-process-filter proc #'gitter--output-filter)))
+          (add-hook 'post-command-hook #'gitter--update-timer nil t)
+          ;; (add-hook 'window-configuration-change-hook #'gitter--display-input-buffer nil t)
+          ;; (add-hook 'kill-buffer-hook #'gitter--kill-input-buffer nil t)
+          ;; (setq buffer-quit-function #'gitter--bury)
+          (let (
+                ;; (fill-column 80)
+                ;; (inhibit-read-only t)
+                (prev-messages (gitter--request "GET" (format "/v1/rooms/%s/chatMessages" .id) '((limit . "100")))))
+            (gitter--insert-messages prev-messages .id))
+          (let* ((url (concat gitter--stream-endpoint
+                              (format "/v1/rooms/%s/chatMessages" .id)))
+                 (headers
+                  (list "Accept: application/json"
+                        (format "Authorization: Bearer %s" gitter-token)))
+                 (proc
+                  ;; NOTE According to (info "(elisp) Asynchronous Processes")
+                  ;; we should use a pipe by let-binding `process-connection-type'
+                  ;; to nil, however, it doesn't working very well on my system
+                  (apply #'start-process
+                         (concat "curl-streaming-process-" .name)
+                         (current-buffer)
+                         gitter-curl-program-name
+                         (gitter--curl-args url "GET" headers)))
+                 ;; Parse response (json) incrementally
+                 ;; Use a scratch buffer to accumulate partial output
+                 (parse-buf (generate-new-buffer
+                             (concat " *Gitter search parse for " (buffer-name)))))
+            (process-put proc 'room-id .id)
+            (process-put proc 'parse-buf parse-buf)
+            (set-process-filter proc #'gitter--output-filter)))
 
         ;; (with-current-buffer (get-buffer-create input-buffer)
         ;;   (gitter-input-mode)
@@ -626,9 +652,9 @@ PARAMS is an alist."
         ;;   (setq gitter--input-marker (point-max-marker))
         ;;   (add-hook 'after-change-functions #'gitter--input-window-resize nil t)))
 
-      (switch-to-buffer (current-buffer))
-      ;; (setq mode-line-format nil)
-      (recenter -1))))
+        (switch-to-buffer (current-buffer))
+        ;; (setq mode-line-format nil)
+        (recenter -1)))))
         ;;   (pop-to-buffer gitter--input-buffer
         ;;                  '(display-buffer-below-selected . ((dedicated . t)))))
         ;; ;; (setq header-line-format "Input:\t\t\tthreads")
@@ -791,7 +817,7 @@ buttons located within the ewoc."
                              (concat "https://ui-avatars.com/api/?name=%s" url-name)))
                          (concat gitter--avatar-dir .fromUser.username))))
     (let* ((text (format "%s @%s %s".fromUser.displayName .fromUser.username .sent))
-           (whitespace (make-string (- 76 (length text)) (string-to-char " "))))
+           (whitespace (make-string (- 116 (length text)) (string-to-char " "))))
       (when window-system
         (insert-text-button " "
                             'type 'gitter-avatar

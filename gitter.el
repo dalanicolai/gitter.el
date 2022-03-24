@@ -827,12 +827,12 @@ buttons located within the ewoc."
                                       (insert label))))
       (insert (propertize " " 'face (gitter--prompt-face response)))
       (insert-text-button .sent 
-                          'type 'gitter-data
                           'face (list (gitter--prompt-face response)))
       ;; (insert (propertize (concat text whitespace)
       ;;                     'face (test response)))
       (insert (propertize " " 'face (gitter--prompt-face response)))
       (insert-text-button whitespace
+                          'type 'gitter-data
                           'face (list (gitter--prompt-face response))
                           'action (lambda (b) (pp (gitter--button-get-data b))))
       (insert (propertize " " 'face (gitter--prompt-face response)))

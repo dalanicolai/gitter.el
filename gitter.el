@@ -513,7 +513,12 @@ PARAMS is an alist."
         (setq gitter--room-id room-id)
         (gitter--insert-messages
          (gitter--request "GET" (format "/v1/rooms/%s/chatMessages/%s/thread" room-id parent-id) '((limit . "100"))))
-        (add-hook 'post-command-hook #'gitter--update-timer nil t)))))
+        (add-hook 'post-command-hook #'gitter--update-timer nil t)))
+    (forward-line)))
+
+(defun gitter-goto-unread ()
+  (interactive)
+  (gitter--goto-unread-item 'chat))
 
 (defun gitter--mode-line-buttons (&optional unread mentions)
   (let* ((unread-items (when (or (not unread) (or (/= unread 0) (/= mentions 0)))

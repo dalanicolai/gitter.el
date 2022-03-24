@@ -530,13 +530,13 @@ PARAMS is an alist."
       (setq gitter--unread-items unread-items))
     (concat (unless (= unread 0)
               (propertize (format "unread: %s" unread)
-                          'face '(:foreground "darkolivegreen")
+                          'face '(:foreground "darkolivegreen3")
                           'mouse-face 'mode-line-highlight
                           'keymap gitter-unread-button-map))
             " "
             (unless (= mentions 0)
               (propertize (format "mentions: %s" mentions)
-                          'face '(:foreground "orange4")
+                          'face '(:foreground "orange3")
                           'mouse-face 'mode-line-highlight
                           'keymap gitter-mentions-button-map)))))
 
@@ -1062,11 +1062,11 @@ machine gitter.im password here-is-your-token"))))
                                             (concat (when (/= unread 0)
                                                       (propertize
                                                        (format " unread: %s" unread)
-                                                       'face '(:foreground "darkolivegreen")))
+                                                       'face '(:foreground "darkolivegreen3")))
                                                     (when (/= mentions 0)
                                                       (propertize
                                                        (format " mentions %s" mentions)
-                                                       'face '(:foreground "orange4"))))))))
+                                                       'face '(:foreground "orange3"))))))))
          (name (completing-read "Open room: " rooms nil t))
          (room-data (seq-find (lambda (r)
                                 (rassoc name r))

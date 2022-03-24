@@ -99,6 +99,8 @@ URL `https://developer.gitter.im/docs/streaming-api'.")
 (defvar-local gitter--input-marker nil
   "The markder where input (i.e., composing a new message) begins.")
 
+(defvar gitter-text-width 113)
+
 (defvar-local gitter--messages nil)
 
 (defvar-local gitter--ewoc nil)
@@ -364,7 +366,7 @@ PARAMS is an alist."
                         .fromUser.username)))
         ;; Delete one newline
         (progn (unless .editedAt (delete-char -1))
-               (insert-text-button (make-string 118 (string-to-char " "))
+               (insert-text-button (make-string (- gitter-text-width 2) (string-to-char " "))
                                    'face (list (gitter--prompt-face response))
                                    'action (lambda (b) (pp (gitter--button-get-data b))))
                (insert-text-button "···"
@@ -385,7 +387,7 @@ PARAMS is an alist."
       ;; " "))
       (pcase gitter--formatting-library
         ('shr (let* (
-                     ;; (shr-max-width 120)
+                     (shr-max-width gitter-text-width)
                      (html .html)
                      (formatted-text
                       (with-temp-buffer (insert html)
@@ -590,6 +592,7 @@ PARAMS is an alist."
                                                                     (alist-get 'mentions room-data)))
           (setq-local header-line-format
                       (concat
+                       " "
                        (propertize
                         (concat (make-text-button " " nil
                                                   'display (create-image (if (string= .id "543c742ddb8155e6700cb292")
@@ -817,7 +820,7 @@ buttons located within the ewoc."
                              (concat "https://ui-avatars.com/api/?name=%s" url-name)))
                        (concat gitter--avatar-dir .fromUser.username))))
     (let* ((text (format "%s @%s %s".fromUser.displayName .fromUser.username .sent))
-           (whitespace (make-string (- 116 (length text)) (string-to-char " "))))
+           (whitespace (make-string (- gitter-text-width 4 (length text)) (string-to-char " "))))
       (when window-system
         (insert-text-button " "
                             'type 'gitter-avatar

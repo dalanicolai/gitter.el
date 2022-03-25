@@ -1057,7 +1057,21 @@ in."
                                     (with-current-buffer buf
                                       (when (eq major-mode 'gitter-mode)
                                         gitter--room-name)))
-                                  (buffer-list)))))
+                                  (buffer-list))))
+           (completion-extra-properties '(:annotation-function
+                                                                 (lambda (name)
+                                                                   (let* ((unread-items (with-current-buffer name
+                                                                                     gitter--unread-items))
+                                                                          (unread (length (alist-get 'chat unread-items)))
+                                                                          (mentions (length (alist-get 'mentions unread-items))))
+                                                                     (concat (when (/= unread 0)
+                                                                               (propertize
+                                                                                (format " unread: %s" unread)
+                                                                                'face '(:foreground "darkolivegreen3")))
+                                                                             (when (/= mentions 0)
+                                                                               (propertize
+                                                                                (format " mentions %s" mentions)
+                                                                                'face '(:foreground "orange3")))))))))
       (switch-to-buffer (completing-read "Select room: " rooms)))))
 
 ;;;###autoload

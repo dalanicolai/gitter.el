@@ -44,6 +44,7 @@
 (require 'shr)
 (require 'shr-tag-pre-highlight)
 (require 'avy)
+(require 'notifications)
 
 (eval-when-compile (require 'let-alist))
 (eval-when-compile (require 'evil nil t))
@@ -747,7 +748,13 @@ PARAMS is an alist."
                   ;;            text))
                   ;;  "\n"
                   ;;  "\n")
-                  (setq gitter--last-message response)))
+                  (setq gitter--last-message response))
+                (let-alist response
+                  (let ((avatar (concat gitter--avatar-dir .fromUser.username)))
+                    (notifications-notify :title .fromUser.displayName
+                                          :body .text
+                                          :app-icon avatar
+                                          :sound-file "/usr/share/sounds/freedesktop/stereo/message.oga"))))
               (delete-region (point-min) (point)))
           (error
            ;; FIXME

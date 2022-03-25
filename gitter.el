@@ -567,7 +567,7 @@ PARAMS is an alist."
 ;;     ;; (setq buffer-quit-function #'gitter--bury)
 ;;     (gitter--insert-messages messages id)))
 
-(defun gitter--open-room (room-data)
+(defun gitter--open-room (room-data &optional do-not-show)
   (let-alist room-data
     (let* (
            ;; (name (alist-get 'name room-data))
@@ -656,9 +656,10 @@ PARAMS is an alist."
         ;;   (setq gitter--input-marker (point-max-marker))
         ;;   (add-hook 'after-change-functions #'gitter--input-window-resize nil t)))
 
-        (switch-to-buffer (current-buffer))
-        ;; (setq mode-line-format nil)
-        (recenter -1)))))
+        (unless do-not-show
+          (switch-to-buffer (current-buffer))
+          ;; (setq mode-line-format nil)
+          (recenter -1))))))
 ;;   (pop-to-buffer gitter--input-buffer
 ;;                  '(display-buffer-below-selected . ((dedicated . t)))))
 ;; ;; (setq header-line-format "Input:\t\t\tthreads")
@@ -1044,9 +1045,10 @@ learning how to make commandsnon-interactive."
   (gitter--ace-buttons 'gitter-data))
 
 ;;;###autoload
-(defun gitter ()
-  "Open a room.
-When ARG is non-nil, refresh `gitter--user-rooms' list."
+(defun gitter (&optional name do-not-show)
+  "Select and open a room.
+The optional argument NAME can be the name of a room the user is
+in, in which case that room will be opened directly."
   (interactive)
   (unless (stringp gitter-token)
     (let* ((plist (car (auth-source-search :max 1 :host "gitter.im")))
@@ -1059,31 +1061,32 @@ machine gitter.im password here-is-your-token"))))
   (setq gitter--user-id (let-alist (car (gitter--request "GET" "/v1/user")) .id))
   (setq gitter--user-rooms (gitter--request "GET" "/v1/rooms"))
   ;; FIXME Assuming room name is unique because of `completing-read'
-  (let* ((rooms (mapcar (lambda (alist)
-                          (alist-get 'name alist))
-                        gitter--user-rooms))
-         (completion-extra-properties '(:annotation-function
-                                        (lambda (name)
-                                          (let* ((room (seq-find (lambda (r)
-                                                                   (rassoc name r))
-                                                                 gitter--user-rooms))
-                                                 (unread   (alist-get 'unreadItems room))
-                                                 (mentions (alist-get 'mentions room)))
-                                            (concat (when (/= unread 0)
-                                                      (propertize
-                                                       (format " unread: %s" unread)
-                                                       'face '(:foreground "darkolivegreen3")))
-                                                    (when (/= mentions 0)
-                                                      (propertize
-                                                       (format " mentions %s" mentions)
-                                                       'face '(:foreground "orange3"))))))))
-         (name (completing-read "Open room: " rooms nil t))
+  (let* ((name (or name
+                   (let* ((rooms (mapcar (lambda (alist)
+                                           (alist-get 'name alist))
+                                         gitter--user-rooms))
+                          (completion-extra-properties '(:annotation-function
+                                                         (lambda (name)
+                                                           (let* ((room (seq-find (lambda (r)
+                                                                                    (rassoc name r))
+                                                                                  gitter--user-rooms))
+                                                                  (unread   (alist-get 'unreadItems room))
+                                                                  (mentions (alist-get 'mentions room)))
+                                                             (concat (when (/= unread 0)
+                                                                       (propertize
+                                                                        (format " unread: %s" unread)
+                                                                        'face '(:foreground "darkolivegreen3")))
+                                                                     (when (/= mentions 0)
+                                                                       (propertize
+                                                                        (format " mentions %s" mentions)
+                                                                        'face '(:foreground "orange3")))))))))
+                     (completing-read "Open room: " rooms nil t))))
          (room-data (seq-find (lambda (r)
                                 (rassoc name r))
                               gitter--user-rooms)))
     (unless (file-directory-p gitter--avatar-dir)
       (make-directory gitter--avatar-dir))
-    (gitter--open-room room-data)))
+    (gitter--open-room room-data do-not-show)))
 
 (defun gitter-send-message (&optional node)
   "Send message in the current Gitter buffer."

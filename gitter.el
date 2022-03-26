@@ -445,7 +445,9 @@ PARAMS is an alist."
              (string= gitter--room-id room-id))
     (let ((messages (gitter--currently-displayed-messages)))
       (gitter--flag-messages-read gitter--room-id messages)
-      (setq gitter--room-data (gitter--request "GET" (format "/v1/rooms/%s" room-id)))
+      ;; (setq gitter--room-data (gitter--request "GET" (format "/v1/rooms/%s" room-id)))
+      (setq gitter--room-data (gitter--get-room-data room-id))
+      (setq gitter--unread-items (gitter--unread-and-mentions))
       ;; (setq gitter--messages (print (gitter--request "GET"
       ;;                                                (print (format "/v1/rooms/%s/chatMessages"
       ;;                                                               room-id
@@ -749,13 +751,20 @@ PARAMS is an alist."
                   ;;            text))
                   ;;  "\n"
                   ;;  "\n")
-                  (setq gitter--last-message response))
-                (let-alist response
-                  (let ((avatar (concat gitter--avatar-dir .fromUser.username)))
-                    (notifications-notify :title .fromUser.displayName
-                                          :body .text
-                                          :app-icon avatar
-                                          :sound-file "/usr/share/sounds/freedesktop/stereo/message.oga"))))
+                  (setq gitter--last-message response)
+                  (setq gitter--room-data (gitter--request "GET" (format "/v1/rooms/%s" gitter--room-id)))
+                  (setq-local global-mode-string (gitter--mode-line-buttons (alist-get 'unreadItems gitter--room-data)
+                                                                            (alist-get 'mentions gitter--room-data)))
+                  (force-mode-line-update)
+
+                  (let-alist response
+                    (let ((avatar (concat gitter--avatar-dir .fromUser.username)))
+                      ;; TODO optionally add :on-action to jump to correct buffer
+                      (notifications-notify :title .fromUser.displayName
+                                            :body .text
+                                            :app-icon avatar
+                                            :sound-file "/usr/share/sounds/freedesktop/stereo/message.oga")))))
+
               (delete-region (point-min) (point)))
           (error
            ;; FIXME
@@ -1000,6 +1009,9 @@ learning how to make commandsnon-interactive."
 ;;   (kbd "<tab>") #'gitter-switch-buffer)
 
 ;;; Commands
+
+(defun gitter--get-room-data (room-id)
+  (gitter--request "GET" (format "/v1/rooms/%s" room-id)))
 
 ;; (defun gitter-goto-next-message ()
 ;;   (interactive)

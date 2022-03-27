@@ -414,7 +414,7 @@ PARAMS is an alist."
                                     (let ((id gitter--room-id))
                                       (switch-to-buffer-other-window "thread")
                                       (erase-buffer)
-                                      (gitter-mode)
+                                      (gitter-thread-mode)
                                       (setq gitter--room-id id)
                                       (gitter--insert-messages
                                        (gitter--request "GET"
@@ -443,31 +443,32 @@ PARAMS is an alist."
   (interactive)
   (when (and gitter--room-id
              (string= gitter--room-id room-id))
-    (let ((messages (gitter--currently-displayed-messages)))
-      (gitter--flag-messages-read gitter--room-id messages)
-      ;; (setq gitter--room-data (gitter--request "GET" (format "/v1/rooms/%s" room-id)))
-      (setq gitter--room-data (gitter--get-room-data room-id))
-      (setq gitter--unread-items (gitter--unread-and-mentions))
-      ;; (setq gitter--messages (print (gitter--request "GET"
-      ;;                                                (print (format "/v1/rooms/%s/chatMessages"
-      ;;                                                               room-id
-      ;;                                                               ))
-      ;;                                                (print (list (cons 'limit "2") ;(number-to-string (print (length messages))))
-      ;;                                                             (cons 'beforeId (car messages)))))))
-      ;; (let ((inhibit-read-only t))
-      ;;   ;; (point (point)))
-      ;;   (erase-buffer)
-      ;;   (gitter--insert-messages gitter--messages)
-      ;;   ;; (goto-char point)
-      (ewoc-map (lambda (data)
-                  (when (and (alist-get 'unread data)
-                             (member (alist-get 'id data)
-                                     (gitter--currently-displayed-messages)))
-                    (setf (alist-get 'unread data) nil) t))
-                gitter--ewoc))
-    (setq-local global-mode-string (gitter--mode-line-buttons (alist-get 'unreadItems gitter--room-data)
-                                                              (alist-get 'mentions gitter--room-data)))
-    (force-mode-line-update)))
+      (let ((messages (gitter--currently-displayed-messages)))
+        (gitter--flag-messages-read gitter--room-id messages)
+        ;; (setq gitter--room-data (gitter--request "GET" (format "/v1/rooms/%s" room-id)))
+        (ewoc-map (lambda (data)
+                    (when (and (alist-get 'unread data)
+                               (member (alist-get 'id data)
+                                       (gitter--currently-displayed-messages)))
+                      (setf (alist-get 'unread data) nil) t))
+                  gitter--ewoc))
+      (with-current-buffer gitter--process-buffer
+        (setq gitter--room-data (gitter--get-room-data room-id))
+        (setq gitter--unread-items (gitter--unread-and-mentions))
+        ;; (setq gitter--messages (print (gitter--request "GET"
+        ;;                                                (print (format "/v1/rooms/%s/chatMessages"
+        ;;                                                               room-id
+        ;;                                                               ))
+        ;;                                                (print (list (cons 'limit "2") ;(number-to-string (print (length messages))))
+        ;;                                                             (cons 'beforeId (car messages)))))))
+        ;; (let ((inhibit-read-only t))
+        ;;   ;; (point (point)))
+        ;;   (erase-buffer)
+        ;;   (gitter--insert-messages gitter--messages)
+        ;;   ;; (goto-char point)
+      (setq-local global-mode-string (gitter--mode-line-buttons (alist-get 'unreadItems gitter--room-data)
+                                                                (alist-get 'mentions gitter--room-data)))
+      (force-mode-line-update))))
 
 (defun gitter-flag-all-read ()
   (interactive)
@@ -511,12 +512,14 @@ PARAMS is an alist."
       ;; if `id' is not found in the ewoc then it is probably a reply (in a
       ;; thread)
       (let* ((room-id gitter--room-id)
+             (process-buffer gitter--process-buffer)
              (data (gitter--request "GET" (format "/v1/rooms/%s/chatMessages/%s" room-id id)))
              (parent-id (alist-get 'parentId data)))
         (switch-to-buffer-other-window "thread")
         (erase-buffer)
         (gitter-mode)
         (setq gitter--room-id room-id)
+        (setq gitter--process-buffer process-buffer)
         (gitter--insert-messages
          (gitter--request "GET" (format "/v1/rooms/%s/chatMessages/%s/thread" room-id parent-id) '((limit . "100"))))
         (add-hook 'post-command-hook #'gitter--update-timer nil t)))
@@ -965,27 +968,48 @@ chaotic), that's not my intention but I don't want to bother with
 learning how to make commandsnon-interactive."
   :group 'gitter)
 
+(define-key gitter-mode-map "i" 'gitter-input)
+
+(define-key gitter-mode-map "n" 'gitter-goto-next-message)
+(define-key gitter-mode-map "p" 'gitter-goto-prev-message)
+
+
+(define-key gitter-mode-map "b" 'gitter-open-room-in-browser)
+(define-key gitter-mode-map "d" 'gitter-ace-data)
+(define-key gitter-mode-map "e" 'gitter-ace-edit)
+(define-key gitter-mode-map "m" 'gitter-ace-mention)
+(define-key gitter-mode-map "o" 'link-hint-open-link)
+(define-key gitter-mode-map "r" 'gitter-current-rooms)
+(define-key gitter-mode-map "R" 'gitter)
+(define-key gitter-mode-map (kbd "<tab>") 'gitter-switch-buffer)
+(define-key gitter-mode-map "u" 'gitter-goto-unread)
+(define-key gitter-mode-map "q" 'bury-buffer)
+(define-key gitter-mode-map "Q" 'kill-current-buffer)
+
 ;; (evil-define-key 'normal gitter-mode-map
 ;;   "i" #'gitter-input
 ;;   "C-j" #'gitter-goto-next-message
 ;;   "C-k" #'gitter-goto-prev-message
 ;;   (kbd "<tab>") #'gitter-switch-buffer)
 
-(define-derived-mode gitter-input-mode fundamental-mode "Gitter input"
-  "Minor mode which is enabled automatically in Gitter buffers.
+(define-derived-mode gitter-thread-mode gitter-mode "Gitter thread"
+  "Minor mode which is enabled automatically in Gitter-input buffers.
 With a prefix argument ARG, enable the mode if ARG is positive,
-and disable it otherwise.  If called from Lisp, enable the mode
-if ARG is omitted or nil.
+and disable it otherwise. If called from Lisp, enable the mode if
+ARG is omitted or nil."
+  :group 'gitter)
 
-Ustually you don't need to call it interactively, it is
-interactive because of the cost of using `define-minor-mode'.
-Sorry to make your M-x more chaotic (yes, I think M-x is already
-chaotic), that's not my intention but I don't want to bother with
-learning how to make commandsnon-interactive."
+(define-key gitter-thread-mode-map "q" 'kill-buffer-and-window)
+
+(define-derived-mode gitter-input-mode fundamental-mode "Gitter input"
+  "Minor mode which is enabled automatically in Gitter-input buffers.
+With a prefix argument ARG, enable the mode if ARG is positive,
+and disable it otherwise. If called from Lisp, enable the mode if
+ARG is omitted or nil."
   :group 'gitter)
 
 (define-key gitter-input-mode-map
-            "\C-c\C-c" #'gitter-send-message)
+            "\C-c\C-c" 'gitter-send-message)
 
 (define-derived-mode gitter-edit-mode fundamental-mode "Gitter edit"
   "Minor mode which is enabled automatically in Gitter buffers.
@@ -1013,24 +1037,28 @@ learning how to make commandsnon-interactive."
 (defun gitter--get-room-data (room-id)
   (gitter--request "GET" (format "/v1/rooms/%s" room-id)))
 
-;; (defun gitter-goto-next-message ()
-;;   (interactive)
-;;   (ewoc-goto-next gitter--ewoc 1))
+(defun gitter-goto-next-message (count)
+  (interactive "p")
+  (with-selected-window (get-buffer-window gitter--process-buffer)
+    (ewoc-goto-next gitter--ewoc count)
+    (forward-line)))
 
-;; (defun gitter-goto-prev-message ()
-;;   (interactive)
-;;   (ewoc-goto-prev gitter--ewoc 1))
+(defun gitter-goto-prev-message (count)
+  (interactive "p")
+  (with-selected-window (get-buffer-window gitter--process-buffer)
+    (ewoc-goto-prev gitter--ewoc count)
+    (forward-line)))
 
-(when (featurep 'evil)
-  (evil-define-motion gitter-goto-next-message (count)
-    :type block
-    (with-selected-window (get-buffer-window gitter--process-buffer)
-      (ewoc-goto-next gitter--ewoc (or count 1))))
+;; (when (featurep 'evil)
+;;   (evil-define-motion gitter-goto-next-message (count)
+;;     :type block
+;;     (with-selected-window (get-buffer-window gitter--process-buffer)
+;;       (ewoc-goto-next gitter--ewoc (or count 1))))
 
-  (evil-define-motion gitter-goto-prev-message (count)
-    :type block
-    (with-selected-window (get-buffer-window gitter--process-buffer)
-      (ewoc-goto-prev gitter--ewoc (or count 1)))))
+;;   (evil-define-motion gitter-goto-prev-message (count)
+;;     :type block
+;;     (with-selected-window (get-buffer-window gitter--process-buffer)
+;;       (ewoc-goto-prev gitter--ewoc (or count 1)))))
 
 (defun gitter-switch-buffer ()
   (interactive)
@@ -1164,6 +1192,11 @@ machine gitter.im password here-is-your-token"))))
 (defun gitter-update-message ()
   (interactive)
   (gitter-send-message gitter--node))
+
+(defun gitter-open-room-in-browser ()
+  (interactive)
+  (browse-url (concat "https://gitter.im"
+                      (alist-get 'url gitter--room-data))))
 
 (provide 'gitter)
 ;;; gitter.el ends here

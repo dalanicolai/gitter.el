@@ -116,6 +116,7 @@ URL `https://developer.gitter.im/docs/streaming-api'.")
 (defvar-local gitter--process-buffer nil)
 (defvar-local gitter--input-buffer nil)
 (defvar-local gitter--node nil)
+(defvar-local gitter--parent-id nil)
 
 (defvar gitter--prompt-function #'gitter--default-prompt
   "function called with message JSON object to return a prompt for chatting logs.")
@@ -406,16 +407,23 @@ PARAMS is an alist."
       ;; (fill-region beg (point))
       )
     (when .threadMessageCount
-      (insert (propertize " " 'display `(space . (:width (,(line-pixel-height))))))
-      (insert " ")
-      (insert-text-button "replies"
+      ;; (insert (propertize " " 'display `(space . (:width (,(line-pixel-height))))))
+      ;; (insert " ")
+      (insert-text-button (format "⮑ %s replies" .threadMessageCount)
+                          'type 'gitter-reply
+                          'face 'shr-text
                           'action (lambda (_)
                                     ;; (pop-to-buffer "thread" '(display-buffer-in-direction . ((direction . right))))
-                                    (let ((id gitter--room-id))
+                                    (let ((proc gitter--process-buffer)
+                                          (id gitter--room-id)
+                                          (input-buffer gitter--input-buffer))
                                       (switch-to-buffer-other-window "thread")
                                       (erase-buffer)
                                       (gitter-thread-mode)
+                                      (setq gitter--process-buffer proc)
+                                      (setq gitter--parent-id .id)
                                       (setq gitter--room-id id)
+                                      (setq gitter--input-buffer input-buffer)
                                       (gitter--insert-messages
                                        (gitter--request "GET"
                                                         (format "/v1/rooms/%s/chatMessages/%s/thread" id .id)
@@ -517,7 +525,7 @@ PARAMS is an alist."
              (parent-id (alist-get 'parentId data)))
         (switch-to-buffer-other-window "thread")
         (erase-buffer)
-        (gitter-mode)
+        (gitter-thread-mode)
         (setq gitter--room-id room-id)
         (setq gitter--process-buffer process-buffer)
         (gitter--insert-messages
@@ -672,12 +680,14 @@ PARAMS is an alist."
 
 (defun gitter-input (&optional node)
   (interactive)
-  (let ((process-buffer gitter--process-buffer))
+  (let ((process-buffer gitter--process-buffer)
+        (parent gitter--parent-id))
     (with-current-buffer (get-buffer-create gitter--input-buffer)
       (cond (node (gitter-edit-mode)
                   (setq gitter--node node))
             (t (gitter-input-mode)))
       (setq-local gitter--process-buffer process-buffer)
+      (setq-local gitter--parent-id parent)
       ;; (setq buffer-quit-function #'gitter--bury)
       (setq mode-line-format nil)
       ;; (setq header-line-format (propertize (format "Press %s to send
@@ -724,8 +734,9 @@ PARAMS is an alist."
       (goto-char (point-max))
       (insert output "\n\n")))
 
-  (let ((results-buf (process-buffer process))
-        (parse-buf (process-get process 'parse-buf)))
+  (let* ((results-buf (process-buffer process))
+         (room-id (buffer-local-value 'gitter--room-id results-buf))
+         (parse-buf (process-get process 'parse-buf)))
     (when (buffer-live-p results-buf)
       (with-current-buffer parse-buf
         ;; Insert new data
@@ -735,62 +746,79 @@ PARAMS is an alist."
             (progn
               (goto-char (point-min))
               ;; `gitter--read-response' moves point
-              (let ((response (gitter--read-response)))
+              (let* ((response (gitter--read-response))
+                     (parent-id (alist-get 'parentId response))
+                     (message-buf (if parent-id 
+                                      (when-let (buf (get-buffer "thread"))
+                                        (when (string= (print parent-id)
+                                                       (print (buffer-local-value 'gitter--parent-id
+                                                                                  buf)))
+                                          buf))
+                                    results-buf)))
                 (with-current-buffer results-buf
-                  (ewoc-enter-last gitter--ewoc response)
-                  ;; (if (and gitter--last-message
-                  ;;          (string= .fromUser.username
-                  ;;                   (let-alist gitter--last-message
-                  ;;                     .fromUser.username)))
-                  ;;     ;; Delete one newline
-                  ;;     (delete-char -1)
-                  ;;   (insert (funcall gitter--prompt-function response)))
-                  ;; (insert
-                  ;;  (concat (propertize " " 'display `(space . (:width (,(line-pixel-height)))))
-                  ;;          " "
-                  ;;          (let ((text .text))
-                  ;;            (dolist (fn gitter--markup-text-functions)
-                  ;;              (setq text (funcall fn text)))
-                  ;;            text))
-                  ;;  "\n"
-                  ;;  "\n")
-                  (setq gitter--last-message response)
-                  (setq gitter--room-data (gitter--request "GET" (format "/v1/rooms/%s" gitter--room-id)))
-                  (setq-local global-mode-string (gitter--mode-line-buttons (alist-get 'unreadItems gitter--room-data)
-                                                                            (alist-get 'mentions gitter--room-data)))
-                  (force-mode-line-update)
+                  (when parent-id
+                    (ewoc-map (lambda (data)
+                                (when (string= (alist-get 'id data) parent-id)
+                                  (let ((count (alist-get 'threadMessageCount data)))
+                                    (setf  (alist-get 'threadMessageCount data) (1+ count)))
+                                  t))
+                              gitter--ewoc)))
+                (when message-buf
+                  (with-current-buffer message-buf
+                    (ewoc-enter-last gitter--ewoc response)
+                    ;; (if (and gitter--last-message
+                    ;;          (string= .fromUser.username
+                    ;;                   (let-alist gitter--last-message
+                    ;;                     .fromUser.username)))
+                    ;;     ;; Delete one newline
+                    ;;     (delete-char -1)
+                    ;;   (insert (funcall gitter--prompt-function response)))
+                    ;; (insert
+                    ;;  (concat (propertize " " 'display `(space . (:width (,(line-pixel-height)))))
+                    ;;          " "
+                    ;;          (let ((text .text))
+                    ;;            (dolist (fn gitter--markup-text-functions)
+                    ;;              (setq text (funcall fn text)))
+                    ;;            text))
+                    ;;  "\n"
+                    ;;  "\n")
+                    (setq gitter--last-message response)
+                    (setq gitter--room-data (gitter--request "GET" (format "/v1/rooms/%s" gitter--room-id)))
+                    (setq-local global-mode-string (gitter--mode-line-buttons (alist-get 'unreadItems gitter--room-data)
+                                                                              (alist-get 'mentions gitter--room-data)))
+                    (force-mode-line-update)
 
-                  (let-alist response
-                    (let ((avatar (concat gitter--avatar-dir .fromUser.username)))
-                      ;; TODO optionally add :on-action to jump to correct buffer
-                      (notifications-notify :title .fromUser.displayName
-                                            :body .text
-                                            :app-icon avatar
-                                            :sound-file "/usr/share/sounds/freedesktop/stereo/message.oga")))))
+                    (let-alist response
+                      (let ((avatar (concat gitter--avatar-dir .fromUser.username)))
+                        ;; TODO optionally add :on-action to jump to correct buffer
+                        (notifications-notify :title .fromUser.displayName
+                                              :body .text
+                                              :app-icon avatar
+                                              :sound-file "/usr/share/sounds/freedesktop/stereo/message.oga"))))))
 
-              (delete-region (point-min) (point)))
-          (error
-           ;; FIXME
-           (with-current-buffer (get-buffer-create "*Debug Gitter Log")
-             (goto-char (point-max))
-             (insert (format "The error was: %s" err)
-                     "\n"
-                     output))))))))
+                (delete-region (point-min) (point)))
+              (error
+               ;; FIXME
+               (with-current-buffer (get-buffer-create "*Debug Gitter Log")
+                 (goto-char (point-max))
+                 (insert (format "The error was: %s" err)
+                         "\n"
+                         output))))))))
 
-(defun gitter--collect-buttons (type)
-  "Return a list of widget-button positions."
-  (let (button-positions)
-    (save-excursion
-      (goto-char (window-start))
-      (while (< (point) (window-end))
-        (when (eq (get-text-property (point) 'type)
-                  type)
-          (push (point) button-positions))
-        (goto-char (next-property-change (point) nil (window-end)))))
-    (nreverse button-positions)))
+  (defun gitter--collect-buttons (type)
+    "Return a list of widget-button positions."
+    (let (button-positions)
+      (save-excursion
+        (goto-char (window-start))
+        (while (< (point) (window-end))
+          (when (eq (get-text-property (point) 'type)
+                    type)
+            (push (point) button-positions))
+          (goto-char (next-property-change (point) nil (window-end)))))
+      (nreverse button-positions)))
 
-(defun gitter--ace-buttons (type)
-  "Ace jump to links in `spacemacs' buffer."
+  (defun gitter--ace-buttons (type)
+    "Ace jump to links in `spacemacs' buffer."
   (interactive)
   (require 'avy)
   (let ((res (avy-with gitter--ace-buttons
@@ -807,6 +835,7 @@ PARAMS is an alist."
 (define-button-type 'gitter-username)
 (define-button-type 'gitter-data)
 (define-button-type 'gitter-edit)
+(define-button-type 'gitter-reply)
 
 (defun gitter--button-get-data (button)
   "Get message data from ewoc.
@@ -979,8 +1008,8 @@ learning how to make commandsnon-interactive."
 (define-key gitter-mode-map "e" 'gitter-ace-edit)
 (define-key gitter-mode-map "m" 'gitter-ace-mention)
 (define-key gitter-mode-map "o" 'link-hint-open-link)
-(define-key gitter-mode-map "r" 'gitter-current-rooms)
-(define-key gitter-mode-map "R" 'gitter)
+(define-key gitter-mode-map "r" 'gitter-ace-reply)
+(define-key gitter-mode-map "R" 'gitter-current-rooms)
 (define-key gitter-mode-map (kbd "<tab>") 'gitter-switch-buffer)
 (define-key gitter-mode-map "u" 'gitter-goto-unread)
 (define-key gitter-mode-map "q" 'bury-buffer)
@@ -1085,6 +1114,10 @@ learning how to make commandsnon-interactive."
   (interactive)
   (gitter--ace-buttons 'gitter-data))
 
+(defun gitter-ace-reply ()
+  (interactive)
+  (gitter--ace-buttons 'gitter-reply))
+
 (defun gitter-current-rooms (arg)
   "Switch to a currently visited room's buffer.
 With non-nil universal prefix, switch to any room the user is
@@ -1178,7 +1211,7 @@ machine gitter.im password here-is-your-token"))))
                            (if node
                                (concat resource "/" (alist-get 'id (ewoc-data node)))
                              resource)
-                           nil `((text . ,msg)))
+                           nil `((text . ,msg) (parentId . ,gitter--parent-id)))
           (kill-buffer))
         (when node
           (ewoc-set-data node

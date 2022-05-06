@@ -410,13 +410,13 @@ PARAMS is an alist."
       ;;                                                              "green3"))))))
       ;; " "))
       (pcase gitter--formatting-library
-        ('shr (let* (
-                     (shr-max-width gitter-text-width)
+        ('shr (let* ((shr-max-width gitter-text-width)
                      (html .html)
-                     (formatted-text
-                      (with-temp-buffer (insert html)
-                                        (libxml-parse-html-region (point-min) (point-max)))))
-                (shr-insert-document formatted-text)))
+                     (dom (with-temp-buffer (insert html)
+                                        (libxml-parse-html-region (point-min) (point-max))))
+                     (formatted-text (with-temp-buffer (shr-insert-document dom)
+                                                       (buffer-string))))
+                (insert formatted-text)))
         ('markdown-mode (insert (with-temp-buffer
                                   (insert .text)
                                   ;; (markdown-mode)

@@ -362,22 +362,43 @@ PARAMS is an alist."
 
 (defun gitter--ewoc-pp-message (response)
   (let-alist response
-    (if (and gitter--last-message
-             (string= .fromUser.username
-                      (let-alist gitter--last-message
-                        .fromUser.username)))
-        ;; Delete one newline
-        (progn (unless .editedAt (delete-char -1))
-               (insert-text-button (make-string (- gitter-text-width 2) (string-to-char " "))
-                                   'face (list (gitter--prompt-face response))
-                                   'action (lambda (b) (pp (gitter--button-get-data b))))
-               (insert-text-button "···"
-                                   'face (list (gitter--prompt-face response))
-                                   'type 'gitter-edit
-                                   'action (lambda (b)
-                                             (gitter-edit (ewoc-locate gitter--ewoc b))))
-               (insert "\n"))
-      (funcall gitter--prompt-function response))
+    (when window-system
+      (unless (member .fromUser.username (mapcar (lambda (x)
+                                                   (alist-get 'username x))
+                                                 gitter--known-users))
+        (push .fromUser gitter--known-users)
+        (unless (member .fromUser.username (directory-files gitter--avatar-dir))
+          (url-copy-file (or .fromUser.avatarUrlSmall
+                             (let* ((splitname (split-string .fromUser.displayName))
+                                    (url-name (mapconcat #'identity splitname "+")))
+                               (concat "https://ui-avatars.com/api/?name=%s" url-name)))
+                         (concat gitter--avatar-dir .fromUser.username)))))
+    (let* ((image (create-image (concat gitter--avatar-dir .fromUser.username)
+                               nil
+                               nil
+                               :height (* 2 (line-pixel-height))
+                               :ascent 80)))
+      (if (and gitter--last-message
+               (string= .fromUser.username
+                        (let-alist gitter--last-message
+                          .fromUser.username)))
+          ;; Delete one newline
+          (progn (unless .editedAt (delete-char -1))
+                 (insert-text-button (make-string (- gitter-text-width 2) (string-to-char " "))
+                                     ;; 'face (list (gitter--prompt-face response))
+                                     'action (lambda (b) (pp (gitter--button-get-data b))))
+                 (insert-text-button "···"
+                                     ;; 'face (list (gitter--prompt-face response))
+                                     'type 'gitter-edit
+                                     'action (lambda (b)
+                                               (gitter-edit (ewoc-locate gitter--ewoc b))))
+                 (insert "\n"))
+        (funcall gitter--prompt-function response image)
+      ;; (delete-char -1)
+        (insert-image image
+                      " "
+                      'left-margin
+                      '(0 0.5 1.0 0.5))))
     (let ((beg (point)))
       ;; (insert (concat (apply #'propertize
       ;;                        " "
@@ -403,32 +424,35 @@ PARAMS is an alist."
                              (dolist (fn gitter--markup-text-functions)
                                (setq text (funcall fn text)))
                              text))))
+      (print (length (thing-at-point 'line)) #'external-debugging-output)
       (insert "\n")
       ;; (fill-region beg (point))
-      )
-    (when .threadMessageCount
-      ;; (insert (propertize " " 'display `(space . (:width (,(line-pixel-height))))))
-      ;; (insert " ")
-      (insert-text-button (format "⮑ %s replies" .threadMessageCount)
-                          'type 'gitter-reply
-                          'face 'shr-text
-                          'action (lambda (_)
-                                    ;; (pop-to-buffer "thread" '(display-buffer-in-direction . ((direction . right))))
-                                    (let ((proc gitter--process-buffer)
-                                          (id gitter--room-id)
-                                          (input-buffer gitter--input-buffer))
-                                      (switch-to-buffer-other-window "thread")
-                                      (erase-buffer)
-                                      (gitter-thread-mode)
-                                      (setq gitter--process-buffer proc)
-                                      (setq gitter--parent-id .id)
-                                      (setq gitter--room-id id)
-                                      (setq gitter--input-buffer input-buffer)
-                                      (gitter--insert-messages
-                                       (gitter--request "GET"
-                                                        (format "/v1/rooms/%s/chatMessages/%s/thread" id .id)
-                                                        '((limit . "100")))))))
-      (insert "\n"))))
+      (cond (.threadMessageCount
+             ;; (insert (propertize " " 'display `(space . (:width (,(line-pixel-height))))))
+             ;; (insert " ")
+             (insert-text-button (format "⮑ %s replies" .threadMessageCount)
+                                 'type 'gitter-reply
+                                 'face '(shr-text :foreground "#2aa1ae")
+                                 'action (lambda (_)
+                                           ;; (pop-to-buffer "thread" '(display-buffer-in-direction . ((direction . right))))
+                                           (let ((proc gitter--process-buffer)
+                                                 (id gitter--room-id)
+                                                 (input-buffer gitter--input-buffer))
+                                             (switch-to-buffer-other-window "thread")
+                                             (erase-buffer)
+                                             (gitter-thread-mode)
+                                             (setq left-margin-width 2)
+                                             (setq gitter--process-buffer proc)
+                                             (setq gitter--parent-id .id)
+                                             (setq gitter--room-id id)
+                                             (setq gitter--input-buffer input-buffer)
+                                             (gitter--insert-messages
+                                              (gitter--request "GET"
+                                                               (format "/v1/rooms/%s/chatMessages/%s/thread" id .id)
+                                                               '((limit . "100")))))))
+             (insert "\n\n"))
+            (t (insert "\n"))))))
+      ;; (goto-char beg)
 
 (defun gitter--insert-messages (messages &optional id)
   (setq gitter--ewoc
@@ -595,6 +619,7 @@ PARAMS is an alist."
         (unless (process-live-p (get-buffer-process (current-buffer)))
           (auto-fill-mode)
           (gitter-mode)
+          (setq left-margin-width 4)
           (setq cursor-type nil)
           (setq gitter--room-data room-data)
           (setq gitter--room-id .id)
@@ -855,39 +880,34 @@ buttons located within the ewoc."
         (if .mentions 'gitter-prompt-mention 'gitter-prompt-unread)
       'gitter-prompt)))
 
-(defun gitter--default-prompt (response)
+(defun gitter--default-prompt (response &optional image)
   "Default function to make prompt by using the JSON object MESSAGE."
   (let-alist response
-    (unless (member .fromUser.username (mapcar (lambda (x)
-                                                 (alist-get 'username x))
-                                               gitter--known-users))
-      (push .fromUser gitter--known-users)
-      (unless (member .fromUser.username (directory-files gitter--avatar-dir))
-        (url-copy-file (or .fromUser.avatarUrlSmall
-                           (let* ((splitname (split-string .fromUser.displayName))
-                                  (url-name (mapconcat #'identity splitname "+")))
-                             (concat "https://ui-avatars.com/api/?name=%s" url-name)))
-                       (concat gitter--avatar-dir .fromUser.username))))
     (let* ((text (format "%s @%s %s".fromUser.displayName .fromUser.username .sent))
            (whitespace (make-string (- gitter-text-width 4 (length text)) (string-to-char " "))))
-      (when window-system
-        (insert-text-button " "
-                            'type 'gitter-avatar
-                            'face 'default
-                            'display (create-image (concat gitter--avatar-dir .fromUser.username)
-                                                   nil
-                                                   nil
-                                                   :height (line-pixel-height)
-                                                   :ascent 100)
-                            'action (lambda (b)
-                                      (let-alist (ewoc-data (ewoc-locate gitter--ewoc b))
-                                        (pp .fromUser.id))))
-        ;; (pcase-let ((`(,x . ,y) (window-absolute-pixel-position b)))
-        ;;   (x-popup-menu (list (list x y) (selected-window))
-        ;;                       (list gitter-avatar-map)))))
+      ;; (when window-system
+      ;;   (insert-text-button " "
+      ;;                       'type 'gitter-avatar
+      ;;                       'face 'default
+      ;;                       'display (create-image (concat gitter--avatar-dir .fromUser.username)
+      ;;                                              nil
+      ;;                                              nil
+      ;;                                              :height (line-pixel-height)
+      ;;                                              :ascent 100)
+      ;;                       'action (lambda (_)
+      ;;                                 (gitter--avatar-posframe)))
+      ;;   ;; (let-alist (ewoc-data (ewoc-locate gitter--ewoc b))
+      ;;   ;;   (pp .fromUser))))
+      ;;   ;; (pcase-let ((`(,x . ,y) (window-absolute-pixel-position b)))
+      ;;   ;;   (x-popup-menu (list (list x y) (selected-window))
+      ;;   ;;                       (list gitter-avatar-map)))))
 
-        ;; '("user" ("choice" ("line" . 3) ("circ" . 4))))))))
-        (insert "\n"))
+      ;;   ;; '("user" ("choice" ("line" . 3) ("circ" . 4))))))))
+      (when image
+        (insert-image image
+                      " "
+                      'left-margin
+                      '(0 0 1.0 0.5)))
       (insert-text-button .fromUser.displayName
                           'type 'gitter-display-name
                           'face (list (gitter--prompt-face response) 'bold)
@@ -920,6 +940,19 @@ buttons located within the ewoc."
                           'face (gitter--prompt-face response)
                           'action (lambda (b)
                                     (gitter-edit (ewoc-locate gitter--ewoc b))))
+      ;; (insert-sliced-image (create-image (concat gitter--avatar-dir .fromUser.username)
+      ;;                                    nil
+      ;;                                    nil
+      ;;                                    :height (* 2 (line-pixel-height))
+      ;;                                    :ascent 80)
+      ;;                      " " 'left-margin 2)
+      ;; (insert-image (create-image (concat gitter--avatar-dir .fromUser.username)
+      ;;                                    nil
+      ;;                                    nil
+      ;;                                    :height (line-pixel-height)
+      ;;                                    :ascent 80)
+      ;;               " "
+      ;;               'left-margin)
       (insert "\n"))))
 
 ;; The result produced by `markdown-mode' was not satisfying

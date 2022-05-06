@@ -2,7 +2,8 @@
 
 ;; Copyright (C) 2016  Chunyang Xu
 
-;; Author: Chunyang Xu <mail@xuchunyang.me>
+;; Authors: Chunyang Xu <mail@xuchunyang.me>
+;;          Daniel Nicolai >dalanicolai@gmail.com>
 ;; URL: https://github.com/xuchunyang/gitter.el
 ;; Package-Requires: ((emacs "24.4") (let-alist "1.0.4"))
 ;; Keywords: Gitter, chat, client, Internet
